@@ -68,3 +68,7 @@ html, body, #root {
     font-size: 9pt;
   }
 }
+
+.home-font {
+  font-family: 'Fredoka', ui-rounded, system-ui, sans-serif;
+}
