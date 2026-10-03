@@ -1,4 +1,4 @@
-import { ARQRTarget } from '../types/arBook';
+import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
 
 const DB_NAME = 'ar_qr_stickers_v1';
 const DB_VERSION = 1;
@@ -120,6 +120,24 @@ async function getAsset(key: string): Promise<FileData | null> {
   }
 }
 
+/** Storage key of a voice file. Indonesian keeps the original key for backwards compatibility. */
+export function audioKey(id: string, lang: VoiceLang = 'id'): string {
+  return lang === 'id' ? `${id}_audio` : `${id}_audio_${lang}`;
+}
+
+/** File id used for the native (app-private) copy of a voice. */
+function nativeAudioId(id: string, lang: VoiceLang): string {
+  return lang === 'id' ? id : `${id}_${lang}`;
+}
+
+/** The sticker's voice for a language (legacy single voice = Indonesian). */
+export function voiceOf(target: ARQRTarget, lang: VoiceLang): VoiceFile | null {
+  const v = target.voices?.[lang];
+  if (v) return v;
+  if (lang === 'id' && target.hasCustomAudio) return { name: target.customAudioName || 'audio', url: target.audioUrl };
+  return null;
+}
+
 export const ARDatabase = {
   async init(): Promise<void> {
     await getDB();
@@ -154,7 +172,7 @@ export const ARDatabase = {
   async deleteTarget(target: ARQRTarget): Promise<void> {
     const ids = [target.id, ...(target.assets || []).map((a) => a.id)];
     try {
-      ids.forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
+      [...ids, ...VOICE_LANGS.map((l) => nativeAudioId(target.id, l))].forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
     } catch {
       // ignore
     }
@@ -163,7 +181,7 @@ export const ARDatabase = {
       const tx = db.transaction([STORE_TARGETS, STORE_ASSETS], 'readwrite');
       tx.objectStore(STORE_TARGETS).delete(target.id);
       ids.forEach((id) => tx.objectStore(STORE_ASSETS).delete(id));
-      tx.objectStore(STORE_ASSETS).delete(`${target.id}_audio`);
+      VOICE_LANGS.forEach((l) => tx.objectStore(STORE_ASSETS).delete(audioKey(target.id, l)));
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
@@ -181,18 +199,20 @@ export const ARDatabase = {
       const tx = db.transaction([STORE_ASSETS], 'readwrite');
       ids.forEach((id) => {
         tx.objectStore(STORE_ASSETS).delete(id);
-        tx.objectStore(STORE_ASSETS).delete(`${id}_audio`);
+        VOICE_LANGS.forEach((l) => tx.objectStore(STORE_ASSETS).delete(audioKey(id, l)));
       });
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
   },
 
-  /** Deletes exact stored file keys (`<id>` for models, `<id>_audio` for audio), including native copies. */
+  /** Deletes exact stored file keys (`<id>` for models, `audioKey()` for voices), including native copies. */
   async deleteAssetKeys(keys: string[]): Promise<void> {
     if (keys.length === 0) return;
     try {
-      new Set(keys.map((k) => k.replace(/_audio$/, ''))).forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
+      new Set(keys.map((k) => k.replace(/_audio$/, '').replace(/_audio_(en|tl)$/, '_$1'))).forEach((id) =>
+        getAndroidBridge()?.deleteTargetFiles?.(id)
+      );
     } catch {
       // ignore
     }
@@ -218,17 +238,17 @@ export const ARDatabase = {
     return getAssetSha(id);
   },
 
-  getAudioSha(id: string): Promise<string | null> {
-    return getAssetSha(`${id}_audio`);
+  getAudioSha(id: string, lang: VoiceLang = 'id'): Promise<string | null> {
+    return getAssetSha(audioKey(id, lang));
   },
 
-  async saveAudioBlob(id: string, fileData: FileData, fileName: string, sha?: string): Promise<void> {
-    await putAsset(`${id}_audio`, fileData, fileName, 'audio', sha);
-    await saveNativeCopy('audio', id, fileData);
+  async saveAudioBlob(id: string, fileData: FileData, fileName: string, sha?: string, lang: VoiceLang = 'id'): Promise<void> {
+    await putAsset(audioKey(id, lang), fileData, fileName, 'audio', sha);
+    await saveNativeCopy('audio', nativeAudioId(id, lang), fileData);
   },
 
-  getAudioBlob(id: string): Promise<FileData | null> {
-    return getAsset(`${id}_audio`);
+  getAudioBlob(id: string, lang: VoiceLang = 'id'): Promise<FileData | null> {
+    return getAsset(audioKey(id, lang));
   },
 };
 
@@ -254,11 +274,13 @@ export async function resolveModelSource(
   return entry.url || null;
 }
 
-export async function resolveAudioSource(target: ARQRTarget): Promise<FileData | string | null> {
-  if (!target.hasCustomAudio) return null;
-  const stored = await ARDatabase.getAudioBlob(target.id);
+/** Best available source of the sticker's voice in a language (null when there is none). */
+export async function resolveAudioSource(target: ARQRTarget, lang: VoiceLang = 'id'): Promise<FileData | string | null> {
+  const voice = voiceOf(target, lang);
+  if (!voice) return null;
+  const stored = await ARDatabase.getAudioBlob(target.id, lang);
   if (stored) return stored;
-  const nativeUrl = getAndroidBridge()?.getAudioUrl?.(target.id);
+  const nativeUrl = getAndroidBridge()?.getAudioUrl?.(nativeAudioId(target.id, lang));
   if (nativeUrl) return nativeUrl;
-  return target.audioUrl || null;
+  return voice.url || null;
 }

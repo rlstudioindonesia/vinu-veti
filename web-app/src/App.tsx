@@ -14,6 +14,8 @@ import { ARScannerOverlay } from './components/ARView/ARScannerOverlay';
 import { QRStickerPrintModal } from './components/QRPrint/QRStickerPrintModal';
 import { AdminPanel } from './components/Admin/AdminPanel';
 import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
+import { LanguagePicker } from './components/Portal/LanguagePicker';
+import { loadSavedLang, useI18n } from './i18n';
 
 // The AR session for a sticker ends this long after the QR was last seen. While the camera moves the
 // scanner often misses the QR (motion blur); ThreeCanvas keeps the model on the sticker using the
@@ -30,6 +32,11 @@ function normalizeCode(code: string) {
 }
 
 export default function App() {
+  const { lang } = useI18n();
+  const langRef = useRef(lang);
+  langRef.current = lang;
+  // First launch: ask for the language once (can be changed later from the home screen)
+  const [isLanguagePickerOpen, setIsLanguagePickerOpen] = useState<boolean>(() => loadSavedLang() === null);
   const [isLoadingApp, setIsLoadingApp] = useState<boolean>(true);
   const [currentView, setCurrentView] = useState<'portal' | 'ar' | 'admin'>('portal');
   const [targets, setTargets] = useState<ARQRTarget[]>([]);
@@ -102,11 +109,6 @@ export default function App() {
     if (activeTargetRef.current?.id !== matched.id) {
       soundService.playScanBeep();
         setActiveTarget(matched);
-      if (matched.autoPlayAudio !== false) {
-        resolveAudioSource(matched).then((src) => {
-          if (src && activeTargetRef.current?.id === matched.id) soundService.playManualAudio(src);
-        });
-      }
     }
     setQrAnchor(anchor);
 
@@ -114,6 +116,15 @@ export default function App() {
     qrLossTimerRef.current = window.setTimeout(() => setQrAnchor(null), QR_LOST_TIMEOUT);
   }, []);
 
+
+  // Narration starts when the character actually appears on the AR screen, in the chosen language
+  const handleModelShown = useCallback(() => {
+    const t = activeTargetRef.current;
+    if (!t || t.autoPlayAudio === false) return;
+    resolveAudioSource(t, langRef.current).then((src) => {
+      if (src && activeTargetRef.current?.id === t.id) soundService.playManualAudio(src);
+    });
+  }, []);
 
   const openCamera = () => {
     resetAR();
@@ -138,6 +149,7 @@ export default function App() {
           onOpenAdmin={handleOpenAdmin}
           showAdminButton={SHOW_ADMIN_BUTTON}
           onOpenPrivacy={() => setIsPrivacyModalOpen(true)}
+          onOpenLanguage={() => setIsLanguagePickerOpen(true)}
           hasContent={targets.length > 0}
         />
       )}
@@ -145,7 +157,7 @@ export default function App() {
       {!isLoadingApp && currentView === 'ar' && (
         <>
           <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
-          <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} />
+          <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} onModelShown={handleModelShown} />
           <ARScannerOverlay
             activeTarget={qrAnchor ? activeTarget : null}
             onBackToHome={() => {
@@ -178,6 +190,8 @@ export default function App() {
       />
 
       <PrivacyPolicyModal isOpen={isPrivacyModalOpen} onClose={() => setIsPrivacyModalOpen(false)} />
+
+      {!isLoadingApp && isLanguagePickerOpen && <LanguagePicker onDone={() => setIsLanguagePickerOpen(false)} />}
     </div>
   );
 }

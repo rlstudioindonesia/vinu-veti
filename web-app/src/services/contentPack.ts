@@ -11,8 +11,8 @@
  * never downloaded twice. The admin panel can also export the same layout as a ZIP.
  */
 import { unzipSync, zipSync, strToU8, strFromU8, Zippable } from 'fflate';
-import { ARQRTarget } from '../types/arBook';
-import { ARDatabase, arrayBufferToBase64, getModelEntries, resolveAudioSource, resolveModelSource } from './db';
+import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
+import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, resolveAudioSource, resolveModelSource, voiceOf } from './db';
 import { REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
 
 export interface PackFile {
@@ -35,10 +35,20 @@ export interface PackTarget {
   modelSize?: number;
   modelName?: string;
   assets?: Array<{ id: string; name: string } & PackFile>;
+  // Narration voice per language
+  voices?: Partial<Record<VoiceLang, PackFile & { name?: string }>>;
+  // Legacy single voice (= Indonesian), still written for older app versions
   audio?: string;
   audioSha?: string;
   audioSize?: number;
   audioName?: string;
+}
+
+/** Voices of a manifest entry, including the legacy single voice (= Indonesian). */
+function packVoices(p: PackTarget): Partial<Record<VoiceLang, PackFile & { name?: string }>> {
+  const v = { ...(p.voices || {}) };
+  if (!v.id && p.audio) v.id = { file: p.audio, sha: p.audioSha, size: p.audioSize, name: p.audioName };
+  return v;
 }
 
 export interface ContentManifest {
@@ -91,9 +101,9 @@ function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
     customGlbFileName: p.modelName,
     customGlbUrl: p.model ? new URL(p.model, base).href : undefined,
     assets: (p.assets || []).map((a) => ({ id: a.id, name: a.name, fileName: a.name, url: new URL(a.file, base).href })),
-    hasCustomAudio: !!p.audio,
-    customAudioName: p.audioName,
-    audioUrl: p.audio ? new URL(p.audio, base).href : undefined,
+    voices: Object.fromEntries(
+      Object.entries(packVoices(p)).map(([lang, f]) => [lang, { name: f!.name || 'audio', url: new URL(f!.file, base).href }])
+    ) as Partial<Record<VoiceLang, VoiceFile>>,
     source: 'pack',
     createdAt,
     updatedAt: p.updatedAt,
@@ -101,9 +111,10 @@ function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
 }
 
 interface MirrorJob {
-  key: string; // storage key: "<id>" for models, "<id>_audio" for audio
+  key: string; // storage key: "<id>" for models, audioKey() for voices
   id: string;
   kind: 'model' | 'audio';
+  lang?: VoiceLang;
   url: string;
   sha?: string;
   name: string;
@@ -115,12 +126,16 @@ function mirrorJobs(p: PackTarget, t: ARQRTarget): MirrorJob[] {
   (t.assets || []).forEach((a, i) => {
     if (a.url) jobs.push({ key: a.id, id: a.id, kind: 'model', url: a.url, sha: p.assets?.[i]?.sha, name: a.fileName });
   });
-  if (t.audioUrl) jobs.push({ key: `${t.id}_audio`, id: t.id, kind: 'audio', url: t.audioUrl, sha: p.audioSha, name: p.audioName || 'audio' });
+  const voices = packVoices(p);
+  VOICE_LANGS.forEach((lang) => {
+    const url = t.voices?.[lang]?.url;
+    if (url) jobs.push({ key: audioKey(t.id, lang), id: t.id, kind: 'audio', lang, url, sha: voices[lang]?.sha, name: voices[lang]?.name || 'audio' });
+  });
   return jobs;
 }
 
 async function storedSha(job: MirrorJob): Promise<string | null> {
-  return job.kind === 'model' ? ARDatabase.getAssetSha(job.id) : ARDatabase.getAudioSha(job.id);
+  return job.kind === 'model' ? ARDatabase.getAssetSha(job.id) : ARDatabase.getAudioSha(job.id, job.lang);
 }
 
 /**
@@ -207,7 +222,7 @@ export async function syncContentPack(onMetadataChanged?: () => void): Promise<v
       const data = await download(job.url);
       const sha = job.sha || (await sha256Hex(data));
       if (job.kind === 'model') await ARDatabase.saveAssetBlob(job.id, data, job.name, sha);
-      else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha);
+      else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha, job.lang);
     } catch (err) {
       console.warn('Mirror skipped, retried next time:', job.url, err);
       allOk = false;
@@ -238,6 +253,7 @@ async function toBytes(src: Blob | ArrayBuffer | string | null): Promise<Uint8Ar
 export interface CollectedFile {
   role: 'model' | 'asset' | 'audio';
   assetIndex?: number;
+  lang?: VoiceLang;
   bytes: Uint8Array;
   sha: string;
   ext: string;
@@ -265,10 +281,10 @@ export async function buildManifest(
       updatedAt: t.updatedAt,
       assets: [],
     };
-    const take = async (src: Blob | ArrayBuffer | string | null, role: CollectedFile['role'], ext: string, assetIndex?: number) => {
+    const take = async (src: Blob | ArrayBuffer | string | null, role: CollectedFile['role'], ext: string, assetIndex?: number, lang?: VoiceLang) => {
       const bytes = await toBytes(src);
       if (!bytes) return null;
-      const f: CollectedFile = { role, assetIndex, bytes, sha: await sha256Hex(bytes), ext };
+      const f: CollectedFile = { role, assetIndex, lang, bytes, sha: await sha256Hex(bytes), ext };
       const path = pathFor(t, f);
       if (onFile) await onFile(t, f, path);
       return { f, path };
@@ -286,26 +302,32 @@ export async function buildManifest(
       const r = await take(await resolveModelSource(t, i + 1), 'asset', 'glb', i);
       if (r) p.assets!.push({ id: extras[i].id, name: extras[i].fileName, file: r.path, sha: r.f.sha, size: r.f.bytes.byteLength });
     }
-    const audio = await take(await resolveAudioSource(t), 'audio', extOf(t.customAudioName, 'mp3'));
-    if (audio) {
-      p.audio = audio.path;
-      p.audioSha = audio.f.sha;
-      p.audioSize = audio.f.bytes.byteLength;
-      p.audioName = t.customAudioName;
+    for (const lang of VOICE_LANGS) {
+      const voice = voiceOf(t, lang);
+      if (!voice) continue;
+      const r = await take(await resolveAudioSource(t, lang), 'audio', extOf(voice.name, 'mp3'), undefined, lang);
+      if (!r) continue;
+      (p.voices ??= {})[lang] = { file: r.path, sha: r.f.sha, size: r.f.bytes.byteLength, name: voice.name };
+      if (lang === 'id') {
+        p.audio = r.path;
+        p.audioSha = r.f.sha;
+        p.audioSize = r.f.bytes.byteLength;
+        p.audioName = voice.name;
+      }
     }
     packTargets.push(p);
   }
   return { app: 'vinu-veti', version: 1, updatedAt: Date.now(), targets: packTargets };
 }
 
-/** Builds a ZIP content pack (manifest.json + models/ + audio/) from the given targets. */
+/** Builds a ZIP content pack (manifest.json + models/ + audio/<id>_<lang>.*) from the given targets. */
 export async function exportContentPack(targets: ARQRTarget[]): Promise<Blob> {
   const files: Zippable = {};
   const manifest = await buildManifest(
     targets,
     (t, f) =>
       f.role === 'audio'
-        ? `audio/${t.id}.${f.ext}`
+        ? `audio/${t.id}_${f.lang ?? 'id'}.${f.ext}`
         : `models/${f.role === 'asset' ? t.assets![f.assetIndex!].id : t.id}.glb`,
     async (_t, f, path) => {
       files[path] = [f.bytes, { level: 0 }];
@@ -330,9 +352,8 @@ export async function importContentPack(file: Blob): Promise<number> {
     const target: ARQRTarget = {
       ...toTarget(p, BUNDLED_BASE, Date.now()),
       customGlbUrl: undefined,
-      audioUrl: undefined,
+      voices: {},
       assets: [],
-      hasCustomAudio: false,
       source: 'local',
     };
     const main = p.model && entries[prefix + p.model];
@@ -343,10 +364,11 @@ export async function importContentPack(file: Blob): Promise<number> {
       await ARDatabase.saveAssetBlob(a.id, copy(data), a.name);
       target.assets!.push({ id: a.id, name: a.name.replace(/\.[^/.]+$/, ''), fileName: a.name });
     }
-    const audio = p.audio && entries[prefix + p.audio];
-    if (audio) {
-      await ARDatabase.saveAudioBlob(p.id, copy(audio), p.audioName || 'audio');
-      target.hasCustomAudio = true;
+    for (const [lang, f] of Object.entries(packVoices(p)) as Array<[VoiceLang, PackFile & { name?: string }]>) {
+      const data = entries[prefix + f.file];
+      if (!data) continue;
+      await ARDatabase.saveAudioBlob(p.id, copy(data), f.name || 'audio', undefined, lang);
+      target.voices![lang] = { name: f.name || 'audio' };
     }
     await ARDatabase.saveTarget(target);
     count++;

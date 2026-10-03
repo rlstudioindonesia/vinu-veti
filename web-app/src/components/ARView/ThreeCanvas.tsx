@@ -7,10 +7,13 @@ import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
 import { Hand, AlertTriangle } from 'lucide-react';
+import { useI18n } from '../../i18n';
 
 interface ThreeCanvasProps {
   target: ARQRTarget | null;
   qrAnchor: QRAnchor | null;
+  /** Called once each time the character appears on screen (new sticker, or back after losing the QR). */
+  onModelShown?: () => void;
 }
 
 /** One uploaded .glb of the sticker's character (main model or an extra animation file). */
@@ -65,7 +68,11 @@ function quadArea(p: Point2[]): number {
 // model's front (+Z) faces the QR's bottom edge, i.e. the reader holding the book.
 const STAND_ON_QR = new THREE.Matrix4().makeRotationX(Math.PI / 2);
 
-export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) => {
+export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onModelShown }) => {
+  const { t: tr } = useI18n();
+  const onShownRef = useRef(onModelShown);
+  onShownRef.current = onModelShown;
+  const announcedRef = useRef<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -163,6 +170,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
       if (model) {
         if (!anchor || !t) {
           model.visible = false;
+          announcedRef.current = false;
           stabilizerRef.current.reset();
           lastAnchorRef.current = null;
           lastReadingRef.current = null;
@@ -220,7 +228,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
               .multiply(new THREE.Matrix4().makeTranslation(0, t.elevationOffset || 0, 0))
               .multiply(new THREE.Matrix4().makeRotationY(yawRef.current))
               .multiply(new THREE.Matrix4().makeScale(size, size, size));
-            model.visible = model.children.length > 0;
+            model.visible = model.children.some((c) => c.visible);
+            if (model.visible && !announcedRef.current) {
+              announcedRef.current = true;
+              onShownRef.current?.();
+            }
           }
         }
       }
@@ -272,6 +284,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
     activeVariantRef.current = -1;
     setLoadError(null);
     setShowHint(false);
+    announcedRef.current = false;
     if (!target) return;
 
     let cancelled = false;
@@ -297,7 +310,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
         try {
           const source = await resolveModelSource(target, i);
           if (!source) {
-            if (i === 0) throw new Error('File model 3D belum diunggah untuk stiker ini');
+            if (i === 0) throw new Error('missing');
             continue;
           }
           const { scene: gltfScene, animations } = await loadGlbModel(source);
@@ -322,7 +335,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
         } catch (err) {
           console.warn('Model load failed:', entries[i]?.id, err);
           if (i === 0 && !cancelled) {
-            setLoadError(err instanceof Error && err.message.includes('belum') ? err.message : 'Model 3D gagal dimuat');
+            setLoadError(err instanceof Error && err.message === 'missing' ? 'missing' : 'failed');
             setLoadingModel(false);
           }
         }
@@ -423,21 +436,21 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
       {loadingModel && qrAnchor && (
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 px-3 py-1.5 rounded-full text-white">
           <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-          <p className="text-[11px] font-semibold text-emerald-300">Memuat objek 3D...</p>
+          <p className="text-[11px] font-semibold text-emerald-300">{tr('loadingModel')}</p>
         </div>
       )}
 
       {loadError && qrAnchor && (
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/70 px-3 py-1.5 rounded-full text-amber-300 text-[11px] font-semibold">
           <AlertTriangle className="w-3.5 h-3.5" />
-          <span>{loadError}</span>
+          <span>{tr(loadError === 'missing' ? 'modelMissing' : 'modelFailed')}</span>
         </div>
       )}
 
       {showHint && qrAnchor && (
         <div className="absolute top-18 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1.5 rounded-full border border-white/10 text-white/90 text-[11px] shadow-lg flex items-center gap-1.5">
           <Hand className="w-3.5 h-3.5 text-emerald-400 animate-bounce" />
-          <span>Sentuh karakternya untuk ganti gerakan!</span>
+          <span>{tr('tapToChange')}</span>
         </div>
       )}
     </div>

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ARQRTarget, ARQRTargetAsset } from '../../types/arBook';
-import { ARDatabase, resolveAudioSource } from '../../services/db';
+import { ARDatabase, audioKey, resolveAudioSource, voiceOf } from '../../services/db';
+import { VOICE_LANGS, VoiceLang } from '../../types/arBook';
 import { exportContentPack, importContentPack, saveFileToDevice } from '../../services/contentPack';
 import { soundService } from '../../services/soundService';
 import { GlbViewerPreview } from './GlbViewerPreview';
@@ -42,6 +43,12 @@ interface PendingFile {
   name: string;
 }
 
+const VOICE_LABELS: Record<VoiceLang, { flag: string; label: string }> = {
+  id: { flag: '🇮🇩', label: 'Indonesia' },
+  en: { flag: '🇬🇧', label: 'English' },
+  tl: { flag: '🇵🇭', label: 'Tagalog' },
+};
+
 const GLB_ACCEPT = '.glb,model/gltf-binary,application/octet-stream';
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -63,8 +70,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [pendingMain, setPendingMain] = useState<PendingFile | null>(null);
   const [pendingExtras, setPendingExtras] = useState<Record<string, PendingFile>>({});
   const [removedExtraIds, setRemovedExtraIds] = useState<string[]>([]);
-  const [pendingAudio, setPendingAudio] = useState<PendingFile | null>(null);
-  const [isPlayingAudioPreview, setIsPlayingAudioPreview] = useState<boolean>(false);
+  const [pendingVoices, setPendingVoices] = useState<Partial<Record<VoiceLang, PendingFile>>>({});
+  const [removedVoices, setRemovedVoices] = useState<VoiceLang[]>([]);
+  const [playingVoice, setPlayingVoice] = useState<VoiceLang | null>(null);
 
   const filteredTargets = targets.filter(
     (t) =>
@@ -81,10 +89,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setPendingMain(null);
     setPendingExtras({});
     setRemovedExtraIds([]);
-    setPendingAudio(null);
+    setPendingVoices({});
+    setRemovedVoices([]);
     setFormError(null);
     soundService.stopAudio();
-    setIsPlayingAudioPreview(false);
+    setPlayingVoice(null);
   };
 
   const closeForm = () => {
@@ -105,7 +114,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       assets: [],
       modelScale: 1.0,
       elevationOffset: 0,
-      hasCustomAudio: false,
+      voices: {},
       autoPlayAudio: true,
       source: 'local',
       createdAt: Date.now(),
@@ -116,7 +125,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleEdit = (target: ARQRTarget) => {
     resetForm();
-    setEditingTarget(JSON.parse(JSON.stringify(target)));
+    const copy: ARQRTarget = JSON.parse(JSON.stringify(target));
+    // Legacy single voice becomes the Indonesian voice
+    const legacy = voiceOf(copy, 'id');
+    copy.voices = { ...(copy.voices || {}), ...(legacy ? { id: legacy } : {}) };
+    delete copy.hasCustomAudio;
+    delete copy.customAudioName;
+    delete copy.audioUrl;
+    setEditingTarget(copy);
     setIsCreatingNew(false);
   };
 
@@ -184,26 +200,40 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditingTarget({ ...editingTarget, assets: (editingTarget.assets || []).filter((a) => a.id !== assetId) });
   };
 
-  const handleAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVoiceUpload = async (lang: VoiceLang, e: React.ChangeEvent<HTMLInputElement>) => {
     const f = await readFile(e);
     if (!f || !editingTarget) return;
     soundService.stopAudio();
-    setIsPlayingAudioPreview(false);
-    setPendingAudio(f);
-    setEditingTarget({ ...editingTarget, hasCustomAudio: true, customAudioName: f.name, audioUrl: undefined });
+    setPlayingVoice(null);
+    setPendingVoices({ ...pendingVoices, [lang]: f });
+    setRemovedVoices(removedVoices.filter((l) => l !== lang));
+    setEditingTarget({ ...editingTarget, voices: { ...(editingTarget.voices || {}), [lang]: { name: f.name } } });
   };
 
-  const handleToggleAudioPreview = async () => {
-    if (isPlayingAudioPreview) {
-      soundService.stopAudio();
-      setIsPlayingAudioPreview(false);
+  const handleVoiceRemove = (lang: VoiceLang) => {
+    if (!editingTarget) return;
+    soundService.stopAudio();
+    setPlayingVoice(null);
+    const pending = { ...pendingVoices };
+    delete pending[lang];
+    setPendingVoices(pending);
+    setRemovedVoices([...removedVoices, lang]);
+    const voices = { ...(editingTarget.voices || {}) };
+    delete voices[lang];
+    setEditingTarget({ ...editingTarget, voices });
+  };
+
+  const handleVoicePreview = async (lang: VoiceLang) => {
+    soundService.stopAudio();
+    if (playingVoice === lang) {
+      setPlayingVoice(null);
       return;
     }
     if (!editingTarget) return;
-    const src = pendingAudio ? pendingAudio.data : await resolveAudioSource(editingTarget);
+    const src = pendingVoices[lang]?.data ?? (await resolveAudioSource(editingTarget, lang));
     if (src) {
       soundService.playManualAudio(src);
-      setIsPlayingAudioPreview(true);
+      setPlayingVoice(lang);
     }
   };
 
@@ -246,7 +276,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         await ARDatabase.saveAssetBlob(id, f.data, f.name);
       }
       if (removedExtraIds.length > 0) await ARDatabase.deleteStoredFiles(removedExtraIds);
-      if (pendingAudio) await ARDatabase.saveAudioBlob(editingTarget.id, pendingAudio.data, pendingAudio.name);
+      for (const [lang, f] of Object.entries(pendingVoices) as Array<[VoiceLang, PendingFile]>) {
+        await ARDatabase.saveAudioBlob(editingTarget.id, f.data, f.name, undefined, lang);
+      }
+      if (removedVoices.length > 0) await ARDatabase.deleteAssetKeys(removedVoices.map((l) => audioKey(editingTarget.id, l)));
 
       await ARDatabase.saveTarget({
         ...editingTarget,
@@ -407,10 +440,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <Box className="w-3 h-3 text-emerald-400 shrink-0" />
                       {modelLabel(t)}
                     </span>
-                    {t.hasCustomAudio && (
+                    {VOICE_LANGS.some((l) => voiceOf(t, l)) && (
                       <span className="flex items-center gap-1 text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-md border border-sky-500/20">
                         <Music className="w-3 h-3" />
-                        Audio
+                        Suara: {VOICE_LANGS.filter((l) => voiceOf(t, l)).map((l) => VOICE_LABELS[l].flag).join(' ')}
                       </span>
                     )}
                   </div>
@@ -657,7 +690,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
                     <Music className="w-3.5 h-3.5" />
-                    Audio Narasi (opsional)
+                    Suara Narasi 3 Bahasa (opsional)
                   </span>
                   <label className="flex items-center gap-1.5 text-[10px] text-slate-300 cursor-pointer">
                     <input
@@ -666,44 +699,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       onChange={(e) => setEditingTarget({ ...editingTarget, autoPlayAudio: e.target.checked })}
                       className="accent-sky-500 rounded"
                     />
-                    Putar otomatis saat QR terbaca
+                    Putar saat karakter muncul
                   </label>
                 </div>
 
-                <div className="flex items-center justify-between gap-2 p-2 bg-slate-900 rounded-xl border border-slate-800">
-                  <div className="flex items-center gap-2 overflow-hidden text-xs">
-                    <label className="cursor-pointer px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold shrink-0">
-                      Pilih Audio
-                      <input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" onChange={handleAudioUpload} className="hidden" />
-                    </label>
-                    <span className="text-[11px] text-slate-300 truncate">{editingTarget.customAudioName || 'Belum ada audio'}</span>
-                  </div>
-                  {editingTarget.hasCustomAudio && (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        onClick={handleToggleAudioPreview}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 flex items-center gap-1 text-[10px]"
-                      >
-                        {isPlayingAudioPreview ? <Square className="w-3 h-3 fill-sky-400" /> : <Play className="w-3 h-3 fill-sky-400" />}
-                        {isPlayingAudioPreview ? 'Stop' : 'Tes'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          soundService.stopAudio();
-                          setIsPlayingAudioPreview(false);
-                          setPendingAudio(null);
-                          setEditingTarget({ ...editingTarget, hasCustomAudio: false, customAudioName: undefined, audioUrl: undefined });
-                        }}
-                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400"
-                        title="Hapus audio"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  Satu suara per bahasa. Anak mendengar suara sesuai bahasa yang dipilih di aplikasi, saat karakter
+                  muncul di layar AR.
+                </p>
+                {VOICE_LANGS.map((lang) => {
+                  const voice = editingTarget.voices?.[lang];
+                  return (
+                    <div key={lang} className="flex items-center justify-between gap-2 p-2 bg-slate-900 rounded-xl border border-slate-800">
+                      <div className="flex items-center gap-2 overflow-hidden text-xs min-w-0">
+                        <span className="text-base shrink-0" title={VOICE_LABELS[lang].label}>{VOICE_LABELS[lang].flag}</span>
+                        <label className="cursor-pointer px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-[11px] font-semibold shrink-0">
+                          {voice ? 'Ganti' : 'Pilih'}
+                          <input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" onChange={(e) => handleVoiceUpload(lang, e)} className="hidden" />
+                        </label>
+                        <span className="text-[11px] text-slate-300 truncate">
+                          {voice ? voice.name : `Belum ada suara ${VOICE_LABELS[lang].label}`}
+                          {pendingVoices[lang] ? ' (belum disimpan)' : ''}
+                        </span>
+                      </div>
+                      {voice && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleVoicePreview(lang)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 flex items-center gap-1 text-[10px]"
+                          >
+                            {playingVoice === lang ? <Square className="w-3 h-3 fill-sky-400" /> : <Play className="w-3 h-3 fill-sky-400" />}
+                            {playingVoice === lang ? 'Stop' : 'Tes'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleVoiceRemove(lang)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400"
+                            title="Hapus suara"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  );
+                })}
               </div>
             </div>
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Sparkles } from 'lucide-react';
+import { useI18n } from '../../i18n';
 import { MASCOT_SRC, Cloud, Star, Spark, Hills, Leaf, SKY_GRADIENT } from '../Common/Scenery';
 
 interface SplashScreenProps {
@@ -9,6 +10,7 @@ interface SplashScreenProps {
 const MIN_DURATION = 1200;
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({ onLoaded }) => {
+  const { t } = useI18n();
   const [progress, setProgress] = useState<number>(8);
   const [mascotOk, setMascotOk] = useState<boolean>(true);
 
@@ -55,7 +57,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onLoaded }) => {
       <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 pt-10">
         <div className="flex items-center gap-1.5 rounded-full bg-[#FFDD4A] px-4 py-1.5 text-xs font-bold tracking-wide text-[#173A6B] shadow-sm">
           <Sparkles className="h-4 w-4 text-[#F57C00]" />
-          BUKU CERITA AJAIB 3D
+          {t('storybook3d')}
         </div>
         <h1 className="mt-3 flex items-center gap-2 text-[52px] font-bold leading-none drop-shadow-[0_3px_0_rgba(255,255,255,0.9)]">
           <Spark className="text-2xl" />
@@ -91,7 +93,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onLoaded }) => {
             style={{ width: `${progress}%` }}
           />
         </div>
-        <p className="mt-3 text-sm font-semibold text-[#173A6B]">Menyiapkan dunia ajaib... {progress}%</p>
+        <p className="mt-3 text-sm font-semibold text-[#173A6B]">{t('preparing')} {progress}%</p>
       </div>
     </div>
   );
