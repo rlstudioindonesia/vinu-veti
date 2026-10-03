@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
-import { QRAnchor } from '../../services/barcodeScanner';
+import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries, resolveModelSource } from '../../services/db';
-import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
+import { loadGlbCached, normalizeModel } from '../../utils/modelLoader';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
 import { Hand, AlertTriangle } from 'lucide-react';
@@ -33,6 +33,40 @@ interface Step {
 const TAP_PADDING_PX = 36;
 // Little "jump" when the character is touched
 const BOUNCE_MS = 280;
+// Appear (springy pop) / disappear (shrink) animation durations
+const APPEAR_S = 0.42;
+const DISAPPEAR_S = 0.24;
+
+/** Ease-out with a small overshoot: grows a bit past full size, then settles (a friendly "pop"). */
+function easeOutBack(x: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+}
+
+function smoothstep(x: number): number {
+  return x * x * (3 - 2 * x);
+}
+
+/** Frees GPU memory of a model that is no longer shown (important for big .glb files). */
+function disposeObject(obj: THREE.Object3D) {
+  obj.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+    for (const m of mats) {
+      for (const v of Object.values(m)) if (v instanceof THREE.Texture) v.dispose();
+      m.dispose();
+    }
+  });
+}
+
+interface Outgoing {
+  group: THREE.Group;
+  base: THREE.Matrix4;
+  start: number;
+  mixer: THREE.AnimationMixer | null;
+}
 
 // Model height in QR-sticker widths when modelScale = 1
 const BASE_MODEL_HEIGHT = 2.0;
@@ -75,6 +109,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   const announcedRef = useRef<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const warmupRef = useRef<Array<{ pivot: THREE.Object3D; done: () => void }>>([]);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   // Anchor on the QR (pose set every frame); holds every animation variant of the character
@@ -84,6 +119,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   const stepIndexRef = useRef<number>(0);
   const activeVariantRef = useRef<number>(-1);
   const bounceStartRef = useRef<number>(0);
+  // Appear/disappear animation: 0 = hidden, 1 = fully shown
+  const presenceRef = useRef<number>(0);
+  const risingRef = useRef<boolean>(true);
+  const baseMatrixRef = useRef<THREE.Matrix4 | null>(null);
+  const outgoingRef = useRef<Outgoing[]>([]);
 
   // Latest props for the render loop (avoids stale closures)
   const anchorRef = useRef<QRAnchor | null>(qrAnchor);
@@ -96,6 +136,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   const lastAnchorRef = useRef<QRAnchor | null>(null);
   // Previous QR reading (centre direction + capture time), to calibrate the gyroscope
   const lastReadingRef = useRef<{ dir: THREE.Vector3; t: number } | null>(null);
+  // Diagnostics overlay (tap the sticker name 5x in the AR view)
+  const statsRef = useRef<{ reads: number[]; latency: number }>({ reads: [], latency: 0 });
+  const [debugText, setDebugText] = useState<string | null>(null);
+  const gyroRef = useRef<GyroTracker | null>(null);
 
   // Touch interaction
   const yawRef = useRef<number>(0);
@@ -155,6 +199,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     gravity.start();
     const gyro = new GyroTracker();
     gyro.start();
+    gyroRef.current = gyro;
 
     const clock = new THREE.Clock();
     let frameId = 0;
@@ -168,12 +213,13 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       const anchor = anchorRef.current;
       const t = targetRef.current;
       if (model) {
+        let want = false;
         if (!anchor || !t) {
-          model.visible = false;
           announcedRef.current = false;
           stabilizerRef.current.reset();
           lastAnchorRef.current = null;
           lastReadingRef.current = null;
+          gyro.poll();
           gyro.take(); // drop rotation accumulated while nothing was tracked
         } else {
           const cw = container.clientWidth || window.innerWidth;
@@ -191,6 +237,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           // Follow the phone's own rotation (gyroscope) every frame, then correct with new QR readings
           const stab = stabilizerRef.current;
           const now = performance.now();
+          gyro.poll();
           stab.applyCameraRotation(gyro.take());
           if (lastAnchorRef.current !== anchor) {
             lastAnchorRef.current = anchor;
@@ -199,6 +246,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
             if (measured) {
               // The reading describes the frame captured a moment ago (scan latency)
               const capturedAt = anchor.timestamp ? now - (Date.now() - anchor.timestamp) : now;
+              const st = statsRef.current;
+              st.reads.push(now);
+              st.latency = st.latency * 0.8 + (now - capturedAt) * 0.2;
               const dir = new THREE.Vector3().setFromMatrixPosition(measured).normalize();
               const prev = lastReadingRef.current;
               if (prev && capturedAt - prev.t < 400) gyro.calibrate(prev.dir, prev.t, dir, capturedAt);
@@ -215,27 +265,85 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           const lostFor = stab.msSinceMeasurement(now);
           const smoothed = lostFor < (gyro.active ? 2500 : 700) ? stab.pose(delta) : null;
           const pose = smoothed ? uprightPose(smoothed, gravity.get()) : null;
-          if (!pose) model.visible = false;
           if (pose) {
             // Touch feedback: a quick squash-and-stretch jump
             const b = (now - bounceStartRef.current) / BOUNCE_MS;
             const bounce = b >= 0 && b < 1 ? 1 + 0.12 * Math.sin(b * Math.PI) : 1;
             const size = BASE_MODEL_HEIGHT * (t.modelScale || 1) * userScaleRef.current * bounce;
-            model.matrixAutoUpdate = false;
-            model.matrix
+            baseMatrixRef.current = (baseMatrixRef.current ?? new THREE.Matrix4())
               .copy(pose)
               .multiply(STAND_ON_QR)
               .multiply(new THREE.Matrix4().makeTranslation(0, t.elevationOffset || 0, 0))
               .multiply(new THREE.Matrix4().makeRotationY(yawRef.current))
               .multiply(new THREE.Matrix4().makeScale(size, size, size));
-            model.visible = model.children.some((c) => c.visible);
-            if (model.visible && !announcedRef.current) {
+            want = model.children.some((c) => c.visible);
+            if (want && !announcedRef.current) {
               announcedRef.current = true;
               onShownRef.current?.();
             }
           }
         }
+
+        // Pop in when the character appears, shrink away when the QR is gone (scaled at its feet)
+        const p = presenceRef.current;
+        if (want && !risingRef.current) risingRef.current = true;
+        if (!want && risingRef.current) risingRef.current = false;
+        presenceRef.current = want ? Math.min(1, p + delta / APPEAR_S) : Math.max(0, p - delta / DISAPPEAR_S);
+        const pr = presenceRef.current;
+        const s = risingRef.current ? easeOutBack(pr) : smoothstep(pr);
+        if (baseMatrixRef.current && pr > 0.001) {
+          model.matrixAutoUpdate = false;
+          model.matrix.copy(baseMatrixRef.current).multiply(new THREE.Matrix4().makeScale(s, s, s));
+          model.visible = true;
+        } else {
+          model.visible = false;
+        }
       }
+
+      // Exposed for automated tests / diagnostics (appear-disappear progress)
+      (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length };
+
+      // Character of the previous QR shrinking away while the new one appears
+      const now2 = performance.now();
+      outgoingRef.current = outgoingRef.current.filter((o) => {
+        const k = (now2 - o.start) / (DISAPPEAR_S * 1000);
+        if (k >= 1) {
+          scene.remove(o.group);
+          o.mixer?.stopAllAction();
+          disposeObject(o.group);
+          return false;
+        }
+        o.mixer?.update(delta);
+        const sc = 1 - smoothstep(k);
+        o.group.matrix.copy(o.base).multiply(new THREE.Matrix4().makeScale(sc, sc, sc));
+        return true;
+      });
+
+      // GPU warm-up of newly loaded models (see prepareForGpu), in the same frame as the real render
+      if (warmupRef.current.length > 0) {
+        const holder = new THREE.Group();
+        holder.matrixAutoUpdate = false;
+        holder.matrix.makeTranslation(0, -0.5, -3).premultiply(camera.matrixWorld);
+        const jobs = warmupRef.current.splice(0);
+        jobs.forEach((j) => {
+          j.pivot.visible = true;
+          holder.add(j.pivot);
+        });
+        scene.add(holder);
+        const w = container.clientWidth || window.innerWidth;
+        const h = container.clientHeight || window.innerHeight;
+        renderer.setScissorTest(true);
+        renderer.setScissor(Math.floor(w / 2), Math.floor(h / 2), 1, 1);
+        renderer.render(scene, camera);
+        renderer.setScissorTest(false);
+        scene.remove(holder);
+        jobs.forEach((j) => {
+          holder.remove(j.pivot);
+          j.pivot.visible = false;
+          j.done();
+        });
+      }
+
       renderer.render(scene, camera);
     };
     animate();
@@ -244,6 +352,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       gravity.stop();
       gyro.stop();
       cancelAnimationFrame(frameId);
+      warmupRef.current.splice(0).forEach((j) => j.done());
       resizeObserver.disconnect();
       renderer.dispose();
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
@@ -270,14 +379,54 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     }
   }, []);
 
+  const prepareForGpu = useCallback(async (pivot: THREE.Object3D) => {
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    const scene = sceneRef.current;
+    if (!renderer || !camera || !scene) return;
+    pivot.visible = true;
+    try {
+      await renderer.compileAsync(pivot, camera, scene);
+      pivot.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+        for (const m of mats) for (const v of Object.values(m)) if (v instanceof THREE.Texture) renderer.initTexture(v);
+      });
+      // Many phone GPU drivers only finish shaders/textures on the first real draw: the render loop
+      // draws the model once into a single, invisible pixel so that cost is paid before it appears
+      await new Promise<void>((done) => warmupRef.current.push({ pivot, done }));
+    } catch (err) {
+      console.warn('GPU warm-up skipped:', err);
+    }
+    pivot.visible = false;
+  }, []);
+
   // Load every .glb of the sticker once (main first, extra animations in the background), so
   // switching animations on touch is instant
   useEffect(() => {
     const root = modelRef.current;
     if (!root) return;
 
-    variantsRef.current.forEach((v) => v?.mixer?.stopAllAction());
-    root.clear();
+    const scene = sceneRef.current;
+    if (scene && root.visible && root.children.length > 0) {
+      // Previous sticker's character: shrink it away smoothly instead of cutting it off
+      const group = new THREE.Group();
+      group.matrixAutoUpdate = false;
+      [...root.children].forEach((c) => group.add(c));
+      const active = variantsRef.current[activeVariantRef.current];
+      outgoingRef.current.push({ group, base: root.matrix.clone(), start: performance.now(), mixer: active?.mixer ?? null });
+      scene.add(group);
+      variantsRef.current.forEach((v) => v && v !== active && v.mixer?.stopAllAction());
+    } else {
+      variantsRef.current.forEach((v) => {
+        v?.mixer?.stopAllAction();
+        if (v) disposeObject(v.pivot);
+      });
+      root.clear();
+    }
+    root.visible = false;
+    presenceRef.current = 0;
+    baseMatrixRef.current = null;
     variantsRef.current = [];
     stepsRef.current = [];
     stepIndexRef.current = 0;
@@ -308,16 +457,28 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       let mainScale: number | undefined;
       for (let i = 0; i < entries.length; i++) {
         try {
-          const source = await resolveModelSource(target, i);
-          if (!source) {
-            if (i === 0) throw new Error('missing');
-            continue;
+          let loaded;
+          try {
+            // Cached per file + version: scanning a page again shows its character instantly
+            loaded = await loadGlbCached(`${entries[i].id}|${target.updatedAt ?? ''}|${entries[i].url ?? ''}`, () =>
+              resolveModelSource(target, i)
+            );
+          } catch (err) {
+            if (i > 0 && err instanceof Error && err.message === 'missing') continue;
+            throw err;
           }
-          const { scene: gltfScene, animations } = await loadGlbModel(source);
           if (cancelled) return;
+          const { scene: gltfScene, animations } = loaded;
           // Same scale as the main model: the character keeps its size in every animation
           const { pivot, scale } = normalizeModel(gltfScene, mainScale);
           if (i === 0) mainScale = scale;
+          // Compile shaders and upload textures before the character pops in, so the appear
+          // animation (and the first tap on an extra animation) does not stutter
+          await prepareForGpu(pivot);
+          if (cancelled) {
+            disposeObject(pivot);
+            return;
+          }
           pivot.visible = false;
           const mixer = animations.length > 0 ? new THREE.AnimationMixer(gltfScene) : null;
           const actions = mixer ? animations.map((clip) => mixer.clipAction(clip)) : [];
@@ -346,7 +507,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     return () => {
       cancelled = true;
     };
-  }, [target, activateStep]);
+  }, [target, activateStep, prepareForGpu]);
 
   // Touching the character: next animation (next clip / next uploaded .glb of the same QR)
   // Only when the sticker has more than one animation; otherwise touching does nothing at all.
@@ -358,6 +519,33 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     activateStep((stepIndexRef.current + 1) % steps.length);
     setShowHint(false);
   }, [activateStep]);
+
+  // Diagnostics overlay, toggled by tapping the sticker name 5 times (see ARScannerOverlay)
+  useEffect(() => {
+    let timer: number | undefined;
+    const toggle = () => {
+      if (timer) {
+        window.clearInterval(timer);
+        timer = undefined;
+        setDebugText(null);
+        return;
+      }
+      timer = window.setInterval(() => {
+        const now = performance.now();
+        const st = statsRef.current;
+        st.reads = st.reads.filter((t) => now - t < 1000);
+        setDebugText(
+          `Pembaca QR: ${barcodeScanner.lastMethod || '-'} · ${st.reads.length} baca/dtk · telat ${Math.round(st.latency)} ms\n` +
+            `Sensor gerak: ${gyroRef.current?.status() ?? '-'}`
+        );
+      }, 250);
+    };
+    window.addEventListener('vv-debug-toggle', toggle);
+    return () => {
+      window.removeEventListener('vv-debug-toggle', toggle);
+      if (timer) window.clearInterval(timer);
+    };
+  }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     pointerRef.current = { down: true, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY };
@@ -445,6 +633,12 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           <AlertTriangle className="w-3.5 h-3.5" />
           <span>{tr(loadError === 'missing' ? 'modelMissing' : 'modelFailed')}</span>
         </div>
+      )}
+
+      {debugText && (
+        <pre className="absolute bottom-6 left-3 right-3 whitespace-pre-wrap rounded-xl bg-black/75 px-3 py-2 text-[11px] leading-snug text-lime-300 pointer-events-none">
+          {debugText}
+        </pre>
       )}
 
       {showHint && qrAnchor && (

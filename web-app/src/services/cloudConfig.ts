@@ -29,3 +29,13 @@ export async function sha256Hex(data: ArrayBuffer | Uint8Array): Promise<string>
   const digest = await crypto.subtle.digest('SHA-256', buf as unknown as ArrayBuffer);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+/**
+ * Files bigger than this are stored online as numbered parts (`<file>.part0`, `.part1`, …) because the
+ * Supabase free plan refuses single uploads over 50 MB. Readers know a file is split from its size.
+ */
+export const CHUNK_SIZE = 45 * 1024 * 1024;
+
+export function partCount(size: number | undefined): number {
+  return size && size > CHUNK_SIZE ? Math.ceil(size / CHUNK_SIZE) : 0;
+}

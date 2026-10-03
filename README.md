@@ -22,6 +22,18 @@ Menu admin ada di semua versi, tetapi tersembunyi:
 
 Hasil build masuk ke `app/src/main/assets/www`, lalu build APK/AAB di Android Studio.
 
+`npm run build` juga **mengambil semua konten yang sudah dipublikasikan** (model, gerakan, suara 3 bahasa)
+dari Supabase ke `web-app/public/content`, sehingga ikut di dalam APK: begitu anak instal/update dari
+Play Store, semua QR langsung bisa dipakai **tanpa internet**. Konten yang dipublikasikan setelah rilis
+tetap diunduh otomatis saat online (hanya file yang berubah) dan tersimpan di HP.
+Jalankan build di komputer yang terhubung internet; jika server tidak terjangkau, build tetap jalan
+dengan konten yang sudah ada.
+
+## Diagnosa pelacakan AR
+
+Di layar kamera AR, ketuk nama stiker (kanan atas) **5×** untuk menampilkan info: pembaca QR yang dipakai,
+jumlah baca per detik, keterlambatan, dan sumber sensor gerak. Kirim screenshot-nya bila ada masalah.
+
 ## Konten online (disarankan)
 
 Admin mempublikasikan stiker & model ke Supabase; aplikasi Play Store mengunduh hanya file yang berubah

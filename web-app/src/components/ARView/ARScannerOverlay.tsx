@@ -13,6 +13,16 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
   onBackToHome,
 }) => {
   const { t } = useI18n();
+  // 5 quick taps on the sticker name toggle the tracking diagnostics (for support)
+  const tapsRef = React.useRef<number[]>([]);
+  const handleChipTap = () => {
+    const now = Date.now();
+    tapsRef.current = [...tapsRef.current.filter((x) => now - x < 2500), now];
+    if (tapsRef.current.length >= 5) {
+      tapsRef.current = [];
+      window.dispatchEvent(new Event('vv-debug-toggle'));
+    }
+  };
   return (
     <div className="absolute inset-0 pointer-events-none z-30 flex flex-col justify-between p-3 sm:p-5">
       {/* Minimal Top Header - Back Button */}
@@ -26,7 +36,10 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
         </button>
 
         {activeTarget && (
-          <div className="px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-emerald-500/30 text-xs font-semibold text-emerald-300 flex items-center gap-1.5 animate-in fade-in">
+          <div
+            onClick={handleChipTap}
+            className="px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-emerald-500/30 text-xs font-semibold text-emerald-300 flex items-center gap-1.5 animate-in fade-in"
+          >
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span>{activeTarget.name}</span>
           </div>
