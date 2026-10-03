@@ -1,8 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
-import { build3DModelForTarget, loadCustomGlbModel } from '../../utils/modelGenerators';
-import { ARDatabase } from '../../services/db';
+import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
+import { resolveModelSource } from '../../services/db';
 
 interface GlbViewerPreviewProps {
   target: ARQRTarget;
@@ -26,7 +26,7 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 50);
-    camera.position.set(0, 0.5, 2.6);
+    camera.position.set(0, 0.1, 3);
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -71,56 +71,21 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
 
     const load = async () => {
       try {
-        let animations: THREE.AnimationClip[] = [];
-        if (customBlobData) {
-          const res = await loadCustomGlbModel(customBlobData);
-          modelGroup = res.scene;
-          animations = res.animations;
-        } else if (target.customGlbUrl) {
-          const res = await loadCustomGlbModel(target.customGlbUrl);
-          modelGroup = res.scene;
-          animations = res.animations;
-        } else {
-          const storedBlob = await ARDatabase.getAssetBlob(target.id);
-          if (storedBlob) {
-            const res = await loadCustomGlbModel(storedBlob);
-            modelGroup = res.scene;
-            animations = res.animations;
-          } else {
-            modelGroup = build3DModelForTarget(target);
-          }
-        }
+        const source = customBlobData || (await resolveModelSource(target, 0));
+        if (!source) return;
+        const res = await loadGlbModel(source);
+        if (isCancelled) return;
 
-        if (isCancelled || !modelGroup) return;
-
-        // Auto-play GLB animations inside preview!
-        if (animations && animations.length > 0) {
-          const mixer = new THREE.AnimationMixer(modelGroup);
+        if (res.animations.length > 0) {
+          const mixer = new THREE.AnimationMixer(res.scene);
           mixerRef.current = mixer;
-          animations.forEach((clip) => {
-            const action = mixer.clipAction(clip);
-            action.play();
-          });
+          mixer.clipAction(res.animations[0]).play();
         }
 
-        // Add visual square QR anchor plate at bottom
-        const squarePoints = [
-          new THREE.Vector3(-0.7, -0.6, -0.7),
-          new THREE.Vector3(0.7, -0.6, -0.7),
-          new THREE.Vector3(0.7, -0.6, 0.7),
-          new THREE.Vector3(-0.7, -0.6, 0.7),
-          new THREE.Vector3(-0.7, -0.6, -0.7),
-        ];
-        const squareGeo = new THREE.BufferGeometry().setFromPoints(squarePoints);
-        const squareMat = new THREE.LineBasicMaterial({
-          color: new THREE.Color(target.accentColor || '#10b981'),
-        });
-        const squareLine = new THREE.Line(squareGeo, squareMat);
-        modelGroup.add(squareLine);
-
-        const s = target.modelScale || 1.0;
-        modelGroup.scale.set(s, s, s);
-        modelGroup.position.y = target.elevationOffset || 0;
+        modelGroup = normalizeModel(res.scene);
+        const s = 1.4 * (target.modelScale || 1.0);
+        modelGroup.scale.setScalar(s);
+        modelGroup.position.y = -0.7 + (target.elevationOffset || 0);
         scene.add(modelGroup);
       } catch (e) {
         console.warn('Preview load error:', e);
@@ -151,13 +116,13 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
         container.removeChild(renderer.domElement);
       }
     };
-  }, [target, customBlobData]);
+  }, [target.id, target.customGlbUrl, target.modelScale, target.elevationOffset, customBlobData]);
 
   return (
     <div className="relative w-full h-44 rounded-xl overflow-hidden bg-slate-950/80 border border-slate-800 flex items-center justify-center">
       <div ref={mountRef} className="w-full h-full" />
       <span className="absolute bottom-2 left-2 text-[10px] text-emerald-400 font-mono bg-black/70 px-2 py-0.5 rounded-md border border-emerald-500/20">
-        Live Preview 3D & Animasi
+        Pratinjau 3D
       </span>
     </div>
   );

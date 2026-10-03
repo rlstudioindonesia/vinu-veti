@@ -43,7 +43,7 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
 
             <div className="text-center px-4">
               <p className="text-[11px] font-medium text-white/70 bg-black/40 backdrop-blur-xs px-2.5 py-1 rounded-full">
-                Arahkan ke Stiker QR Buku
+                Arahkan kamera ke stiker QR di buku
               </p>
             </div>
           </div>

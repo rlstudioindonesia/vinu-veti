@@ -1,7 +1,14 @@
-import { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } from '@zxing/library';
+import {
+  BarcodeFormat,
+  BinaryBitmap,
+  DecodeHintType,
+  HTMLCanvasElementLuminanceSource,
+  HybridBinarizer,
+  QRCodeReader,
+} from '@zxing/library';
 
 export interface QRAnchor {
-  x: number; // Video pixel X
+  x: number; // Video pixel X (top-left of QR bounding box)
   y: number; // Video pixel Y
   width: number; // Video pixel width
   height: number; // Video pixel height
@@ -12,96 +19,79 @@ export interface QRAnchor {
 
 export interface ScanResult {
   text: string;
-  format: string;
   timestamp: number;
-  anchor?: QRAnchor;
+  anchor: QRAnchor;
 }
 
+type NativeBarcode = {
+  rawValue: string;
+  boundingBox: { x: number; y: number; width: number; height: number };
+  cornerPoints?: Array<{ x: number; y: number }>;
+};
+type NativeDetector = { detect: (src: ImageBitmapSource) => Promise<NativeBarcode[]> };
+type NativeDetectorCtor = {
+  new (opts?: { formats: string[] }): NativeDetector;
+  getSupportedFormats?: () => Promise<string[]>;
+};
+
+// Max width of the frame we analyse. Smaller = faster scanning on low-end phones.
+const SCAN_WIDTH = 720;
+
+/**
+ * Camera + QR scanner.
+ *
+ * Frames are copied to an offscreen canvas and decoded there, so the <video> element that shows the
+ * live camera is never touched by the decoder. (ZXing's decodeFromVideoElement() calls reset(), which
+ * sets video.srcObject = null and leaves only the grey WebView video poster on screen.)
+ */
 export class BarcodeScannerService {
-  private codeReader: BrowserMultiFormatReader | null = null;
   private currentStream: MediaStream | null = null;
-  private activeFacingMode: 'environment' | 'user' = 'environment';
-  private torchEnabled: boolean = false;
+  private zxingReader = new QRCodeReader();
+  private zxingHints = new Map<DecodeHintType, unknown>([
+    [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]],
+    [DecodeHintType.TRY_HARDER, true],
+  ]);
+  private canvas: HTMLCanvasElement | null = null;
+  private nativeDetector: NativeDetector | null | undefined = undefined;
 
-  constructor() {
-    const hints = new Map<DecodeHintType, unknown>();
-    hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-      BarcodeFormat.CODE_128,
-      BarcodeFormat.EAN_13,
-      BarcodeFormat.EAN_8,
-      BarcodeFormat.QR_CODE,
-      BarcodeFormat.UPC_A,
-      BarcodeFormat.UPC_E,
-      BarcodeFormat.CODE_39,
-      BarcodeFormat.DATA_MATRIX,
-    ]);
-    hints.set(DecodeHintType.TRY_HARDER, true);
-
-    try {
-      this.codeReader = new BrowserMultiFormatReader(hints, 250);
-    } catch (e) {
-      console.warn('ZXing init error:', e);
-    }
-  }
-
-  public async startCamera(
-    videoElement: HTMLVideoElement,
-    facingMode: 'environment' | 'user' = 'environment'
-  ): Promise<MediaStream> {
+  public async startCamera(videoElement: HTMLVideoElement): Promise<MediaStream> {
     this.stopCamera();
-    this.activeFacingMode = facingMode;
 
     if (!navigator?.mediaDevices?.getUserMedia) {
-      throw new Error('Kamera tidak didukung pada browser ini');
+      throw new Error('Kamera tidak didukung pada perangkat ini');
     }
 
     const tryConstraints: MediaStreamConstraints[] = [
-      {
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      },
-      {
-        video: {
-          facingMode: facingMode === 'user' ? 'user' : 'environment',
-        },
-        audio: false,
-      },
-      {
-        video: true,
-        audio: false,
-      },
+      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+      { video: { facingMode: 'environment' }, audio: false },
+      { video: true, audio: false },
     ];
 
     let stream: MediaStream | null = null;
     let lastErr: unknown = null;
-
     for (const c of tryConstraints) {
       try {
         stream = await navigator.mediaDevices.getUserMedia(c);
         if (stream) break;
       } catch (e) {
         lastErr = e;
+        // Permission denied will fail for every constraint, no need to keep trying
+        if (e instanceof DOMException && e.name === 'NotAllowedError') break;
       }
     }
 
     if (!stream) {
-      console.error('All camera constraint attempts failed:', lastErr);
       throw lastErr || new Error('Gagal mengaktifkan kamera perangkat');
     }
 
     this.currentStream = stream;
-    videoElement.srcObject = stream;
-    videoElement.setAttribute('playsinline', 'true');
-    videoElement.setAttribute('webkit-playsinline', 'true');
     videoElement.muted = true;
+    videoElement.setAttribute('playsinline', 'true');
+    videoElement.srcObject = stream;
     try {
       await videoElement.play();
     } catch (e) {
-      console.warn('Video auto-play deferred/handled:', e);
+      console.warn('Video play deferred:', e);
     }
     return stream;
   }
@@ -111,145 +101,104 @@ export class BarcodeScannerService {
       this.currentStream.getTracks().forEach((track) => track.stop());
       this.currentStream = null;
     }
-    this.torchEnabled = false;
   }
 
-  public async toggleTorch(): Promise<boolean> {
-    if (!this.currentStream) return false;
-    const track = this.currentStream.getVideoTracks()[0];
-    if (!track) return false;
-
-    try {
-      const capabilities = track.getCapabilities ? (track.getCapabilities() as { torch?: boolean }) : null;
-      if (capabilities && capabilities.torch) {
-        this.torchEnabled = !this.torchEnabled;
-        await track.applyConstraints({
-          advanced: [{ torch: this.torchEnabled } as MediaTrackConstraintSet],
-        });
-        return this.torchEnabled;
+  private async getNativeDetector(): Promise<NativeDetector | null> {
+    if (this.nativeDetector !== undefined) return this.nativeDetector;
+    this.nativeDetector = null;
+    const Ctor = (window as unknown as { BarcodeDetector?: NativeDetectorCtor }).BarcodeDetector;
+    if (Ctor) {
+      try {
+        const formats = Ctor.getSupportedFormats ? await Ctor.getSupportedFormats() : ['qr_code'];
+        if (formats.includes('qr_code')) {
+          this.nativeDetector = new Ctor({ formats: ['qr_code'] });
+        }
+      } catch {
+        this.nativeDetector = null;
       }
-    } catch (e) {
-      console.warn('Torch constraint not supported on this device/browser:', e);
     }
-    return false;
-  }
-
-  public getTorchState(): boolean {
-    return this.torchEnabled;
+    return this.nativeDetector;
   }
 
   public async scanOnce(videoElement: HTMLVideoElement): Promise<ScanResult | null> {
-    if (!videoElement || videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      return null;
-    }
+    if (!videoElement || videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return null;
+    const vW = videoElement.videoWidth;
+    const vH = videoElement.videoHeight;
+    if (!vW || !vH) return null;
 
-    const vWidth = videoElement.videoWidth || 1280;
-    const vHeight = videoElement.videoHeight || 720;
-
-    // 1. Try Native BarcodeDetector if available (instant on Android WebView & Chromium)
-    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+    // 1. Native BarcodeDetector (fast, available in most Android WebViews)
+    const detector = await this.getNativeDetector();
+    if (detector) {
       try {
-        const BarcodeDetectorClass = (
-          window as unknown as {
-            BarcodeDetector: new (opts?: { formats: string[] }) => {
-              detect: (src: ImageBitmapSource) => Promise<
-                Array<{
-                  rawValue: string;
-                  format: string;
-                  boundingBox: { x: number; y: number; width: number; height: number };
-                  cornerPoints?: Array<{ x: number; y: number }>;
-                }>
-              >;
-            };
-          }
-        ).BarcodeDetector;
-
-        const detector = new BarcodeDetectorClass();
-        const barcodes = await detector.detect(videoElement);
-        if (barcodes && barcodes.length > 0) {
-          const b = barcodes[0];
-          const anchor: QRAnchor = {
-            x: b.boundingBox.x,
-            y: b.boundingBox.y,
-            width: b.boundingBox.width,
-            height: b.boundingBox.height,
-            videoWidth: vWidth,
-            videoHeight: vHeight,
-            cornerPoints: b.cornerPoints || [],
-          };
+        const codes = await detector.detect(videoElement);
+        if (codes.length > 0) {
+          const b = codes[0];
           return {
             text: b.rawValue,
-            format: b.format,
             timestamp: Date.now(),
-            anchor,
+            anchor: {
+              x: b.boundingBox.x,
+              y: b.boundingBox.y,
+              width: b.boundingBox.width,
+              height: b.boundingBox.height,
+              videoWidth: vW,
+              videoHeight: vH,
+              cornerPoints: b.cornerPoints,
+            },
           };
         }
+        return null;
       } catch {
-        // Fall back to ZXing
+        // Detector failed on this device, permanently fall back to ZXing
+        this.nativeDetector = null;
       }
     }
 
-    // 2. Fall back to ZXing MultiFormatReader
-    if (this.codeReader) {
-      try {
-        const result = await this.codeReader.decodeFromVideoElement(videoElement);
-        if (result) {
-          let anchor: QRAnchor | undefined = undefined;
-          const pts = result.getResultPoints ? result.getResultPoints() : null;
-          if (pts && pts.length > 0) {
-            let minX = Infinity,
-              minY = Infinity,
-              maxX = -Infinity,
-              maxY = -Infinity;
-
-            const cornerPoints = pts.map((p) => {
-              const px = p.getX();
-              const py = p.getY();
-              if (px < minX) minX = px;
-              if (py < minY) minY = py;
-              if (px > maxX) maxX = px;
-              if (py > maxY) maxY = py;
-              return { x: px, y: py };
-            });
-
-            anchor = {
-              x: minX,
-              y: minY,
-              width: Math.max(40, maxX - minX),
-              height: Math.max(40, maxY - minY),
-              videoWidth: vWidth,
-              videoHeight: vHeight,
-              cornerPoints,
-            };
-          } else {
-            // Default center fallback
-            anchor = {
-              x: vWidth * 0.35,
-              y: vHeight * 0.35,
-              width: vWidth * 0.3,
-              height: vHeight * 0.3,
-              videoWidth: vWidth,
-              videoHeight: vHeight,
-            };
-          }
-
-          return {
-            text: result.getText(),
-            format: result.getBarcodeFormat().toString(),
-            timestamp: Date.now(),
-            anchor,
-          };
-        }
-      } catch {
-        // No barcode in this frame
-      }
+    // 2. ZXing on a downscaled canvas copy of the frame
+    const scale = Math.min(1, SCAN_WIDTH / vW);
+    const cW = Math.round(vW * scale);
+    const cH = Math.round(vH * scale);
+    if (!this.canvas) this.canvas = document.createElement('canvas');
+    const canvas = this.canvas;
+    if (canvas.width !== cW || canvas.height !== cH) {
+      canvas.width = cW;
+      canvas.height = cH;
     }
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+    ctx.drawImage(videoElement, 0, 0, cW, cH);
 
-    return null;
-  }
+    try {
+      const bitmap = new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas)));
+      const result = this.zxingReader.decode(bitmap, this.zxingHints);
+      const pts = result.getResultPoints().slice(0, 3); // 3 finder pattern centers
+      if (pts.length < 3) return null;
 
-  public getActiveFacingMode(): 'environment' | 'user' {
-    return this.activeFacingMode;
+      const xs = pts.map((p) => p.getX() / scale);
+      const ys = pts.map((p) => p.getY() / scale);
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      // Finder centers sit ~3.5 modules inside the QR edge, so grow the box to approximate full size
+      const side = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 1.4;
+
+      return {
+        text: result.getText(),
+        timestamp: Date.now(),
+        anchor: {
+          x: cx - side / 2,
+          y: cy - side / 2,
+          width: side,
+          height: side,
+          videoWidth: vW,
+          videoHeight: vH,
+          cornerPoints: xs.map((x, i) => ({ x, y: ys[i] })),
+        },
+      };
+    } catch {
+      return null; // No QR in this frame
+    } finally {
+      this.zxingReader.reset();
+    }
   }
 }
 
