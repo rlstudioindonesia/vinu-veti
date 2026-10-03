@@ -1,5 +1,6 @@
 import React from 'react';
 import { ShieldCheck, X, Camera, HardDrive, Lock, Mail } from 'lucide-react';
+import { useI18n } from '../../i18n';
 
 interface PrivacyPolicyModalProps {
   isOpen: boolean;
@@ -10,7 +11,35 @@ export const PrivacyPolicyModal: React.FC<PrivacyPolicyModalProps> = ({
   isOpen,
   onClose,
 }) => {
+  const { lang, t } = useI18n();
   if (!isOpen) return null;
+
+  // English / Tagalog: translated summary (the detailed policy below is in Indonesian)
+  if (lang !== 'id') {
+    return (
+      <div className="fixed inset-0 z-60 bg-black/80 flex items-center justify-center p-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full shadow-2xl text-white overflow-hidden">
+          <div className="p-4 border-b border-white/10 flex items-center justify-between bg-slate-950/80">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <h3 className="font-bold text-base">{t('privacyTitle')}</h3>
+            </div>
+            <button onClick={onClose} className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-white/10">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <p className="p-5 text-sm text-slate-200 leading-relaxed">{t('privacyBody')}</p>
+          <div className="p-4 border-t border-white/10 flex justify-end">
+            <button onClick={onClose} className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-semibold">
+              {t('close')}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 animate-in fade-in duration-200">

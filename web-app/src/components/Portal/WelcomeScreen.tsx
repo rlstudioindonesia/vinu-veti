@@ -1,9 +1,11 @@
 import React, { useRef, useState } from 'react';
 import { Lock, Volume2, VolumeX, ChevronRight, Sparkles } from 'lucide-react';
 import { soundService } from '../../services/soundService';
+import { LANGS, useI18n } from '../../i18n';
 import { MASCOT_SRC, Cloud, Star, Spark, Hills, Leaf, SKY_GRADIENT } from '../Common/Scenery';
 
 interface WelcomeScreenProps {
+  onOpenLanguage: () => void;
   onStartCamera: () => void;
   onOpenAdmin: () => void;
   showAdminButton: boolean; // false in the Play Store build: open admin by tapping the badge 7 times
@@ -11,7 +13,9 @@ interface WelcomeScreenProps {
   hasContent: boolean;
 }
 
-export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onOpenAdmin, showAdminButton, onOpenPrivacy, hasContent }) => {
+export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onOpenAdmin, showAdminButton, onOpenPrivacy, onOpenLanguage, hasContent }) => {
+  const { t, lang } = useI18n();
+  const currentLang = LANGS.find((l) => l.code === lang)!;
   const [soundEnabled, setSoundEnabled] = useState<boolean>(!soundService.getMuted());
   const [mascotOk, setMascotOk] = useState<boolean>(true);
 
@@ -56,15 +60,23 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
             className="flex items-center gap-1.5 rounded-full bg-gradient-to-b from-[#1BA7A0] to-[#13827D] px-4 py-2 shadow-[0_4px_0_#0E6B66]"
           >
             <span className="text-lg leading-none">📖</span>
-            <span className="text-base font-bold tracking-wide text-white">
+            <span className="whitespace-nowrap text-base font-bold tracking-wide text-white">
               VINU <span className="text-[#FFD43B]">&amp;</span> VETI
             </span>
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={onOpenLanguage}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-xl shadow-[0_3px_0_rgba(18,59,109,0.25)] active:translate-y-0.5"
+              aria-label={t('language')}
+              title={t('language')}
+            >
+              {currentLang.flag}
+            </button>
+            <button
               onClick={toggleSound}
               className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-b from-[#1BA7A0] to-[#0E6B7A] shadow-[0_3px_0_#0B5560] active:translate-y-0.5"
-              aria-label={soundEnabled ? 'Matikan suara' : 'Nyalakan suara'}
+              aria-label={soundEnabled ? t('soundOff') : t('soundOn')}
             >
               {soundEnabled ? <Volume2 className="h-5 w-5 text-[#FFD43B]" /> : <VolumeX className="h-5 w-5 text-white/70" />}
             </button>
@@ -74,7 +86,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
               className="flex items-center gap-1.5 rounded-full bg-[#173A6B] px-3.5 py-2 text-sm font-semibold text-white shadow-[0_3px_0_#0C2346] active:translate-y-0.5"
             >
               <Lock className="h-4 w-4 text-[#FFD43B]" />
-              Guru &amp; Ortu
+              {t('teacherParent')}
             </button>
             )}
           </div>
@@ -84,7 +96,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
         <div className="mt-6 flex flex-col items-center text-center">
           <div className="flex items-center gap-1.5 rounded-full bg-[#FFDD4A] px-4 py-1.5 text-xs font-bold tracking-wide text-[#173A6B] shadow-sm">
             <Sparkles className="h-4 w-4 text-[#F57C00]" />
-            BUKU CERITA AJAIB 3D
+            {t('storybook3d')}
           </div>
           <h1 className="mt-3 flex items-center gap-2 text-[52px] font-bold leading-none drop-shadow-[0_3px_0_rgba(255,255,255,0.9)]">
             <Spark className="text-2xl" />
@@ -93,7 +105,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
             <span className="text-[#1450A3]">Veti</span>
             <Spark className="text-2xl" />
           </h1>
-          <p className="mt-2 text-lg font-semibold text-[#173A6B]">Buku Bergambar Menjadi Nyata!</p>
+          <p className="mt-2 text-lg font-semibold text-[#173A6B]">{t('tagline')}</p>
         </div>
 
         {/* Mascot */}
@@ -134,8 +146,8 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
           >
             <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-white text-4xl shadow-inner">📷</span>
             <span className="flex-1">
-              <span className="block whitespace-nowrap text-[22px] font-bold leading-tight text-[#173A6B] max-[360px]:text-lg">BUKA KAMERA AJAIB!</span>
-              <span className="block text-sm font-semibold text-[#168C8A]">Sentuh untuk memindai stiker</span>
+              <span className={`block font-bold leading-tight text-[#173A6B] ${lang === 'id' ? 'whitespace-nowrap text-[22px] max-[360px]:text-lg' : 'text-[19px] max-[360px]:text-base'}`}>{t('openCamera')}</span>
+              <span className="block text-sm font-semibold text-[#168C8A]">{t('tapToScan')}</span>
             </span>
             <ChevronRight className="h-7 w-7 shrink-0 text-[#173A6B]" strokeWidth={3} />
           </button>
@@ -143,8 +155,8 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
           {!hasContent && (
             <p className="rounded-2xl bg-white/80 px-3 py-2 text-center text-xs font-semibold text-[#173A6B]">
               {showAdminButton
-                ? 'Belum ada konten AR. Tambahkan stiker & model 3D di menu Guru & Ortu.'
-                : 'Konten AR belum tersedia. Sambungkan internet sekali agar konten terunduh.'}
+                ? t('noContentAdmin')
+                : t('noContent')}
             </p>
           )}
 
@@ -152,14 +164,14 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
             <div className="mb-3 flex items-center justify-center gap-2 text-base font-bold text-[#173A6B]">
               <Spark />
               <span>📖</span>
-              Cara Bermain Sangat Mudah:
+              {t('howToPlay')}
               <Spark />
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
               {[
-                { icon: '📖', label: '1. Buka Buku' },
-                { icon: '📷', label: '2. Arahkan Kamera' },
-                { icon: '✨', label: '3. Muncul 3D!' },
+                { icon: '📖', label: t('step1') },
+                { icon: '📷', label: t('step2') },
+                { icon: '✨', label: t('step3') },
               ].map((s) => (
                 <div key={s.label} className="rounded-2xl bg-[#EEF8FB] px-1 py-3">
                   <div className="text-4xl leading-none">{s.icon}</div>
@@ -175,7 +187,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
           >
             <Spark />
             <span className="text-xl">🛡️</span>
-            Aman untuk Belajar &amp; Bermain
+            {t('safeToPlay')}
             <Spark />
           </button>
         </div>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { ARQRTarget } from '../../types/arBook';
 import { ChevronLeft } from 'lucide-react';
+import { useI18n } from '../../i18n';
 
 interface ARScannerOverlayProps {
   activeTarget: ARQRTarget | null;
@@ -11,6 +12,7 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
   activeTarget,
   onBackToHome,
 }) => {
+  const { t } = useI18n();
   return (
     <div className="absolute inset-0 pointer-events-none z-30 flex flex-col justify-between p-3 sm:p-5">
       {/* Minimal Top Header - Back Button */}
@@ -18,7 +20,7 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
         <button
           onClick={onBackToHome}
           className="p-2.5 rounded-full bg-black/50 hover:bg-black/80 text-white/80 hover:text-white backdrop-blur-md border border-white/10 transition-all active:scale-90"
-          title="Kembali ke Menu Utama"
+          title={t('backToMenu')}
         >
           <ChevronLeft className="w-5 h-5" />
         </button>
@@ -43,7 +45,7 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
 
             <div className="text-center px-4">
               <p className="text-[11px] font-medium text-white/70 bg-black/40 backdrop-blur-xs px-2.5 py-1 rounded-full">
-                Arahkan kamera ke stiker QR di buku
+                {t('pointAtQr')}
               </p>
             </div>
           </div>

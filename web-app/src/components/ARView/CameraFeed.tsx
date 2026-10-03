@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { RefreshCw, VideoOff } from 'lucide-react';
+import { useI18n } from '../../i18n';
 
 interface CameraFeedProps {
   onBarcodeDetected: (barcode: string, anchor: QRAnchor) => void;
@@ -11,6 +12,7 @@ interface CameraFeedProps {
 const SCAN_INTERVAL = 30;
 
 export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, videoRef }) => {
+  const { t } = useI18n();
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const onDetectedRef = useRef(onBarcodeDetected);
@@ -28,9 +30,7 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
       setIsLoading(false);
       const name = err instanceof DOMException ? err.name : '';
       setCameraError(
-        name === 'NotAllowedError'
-          ? 'Izin kamera belum diberikan. Izinkan akses kamera untuk aplikasi ini di Pengaturan, lalu coba lagi.'
-          : 'Gagal mengaktifkan kamera perangkat. Tutup aplikasi lain yang memakai kamera, lalu coba lagi.'
+        name === 'NotAllowedError' ? 'denied' : 'failed'
       );
     }
   }, [videoRef]);
@@ -83,7 +83,7 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
       {isLoading && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950/80 text-white z-10 p-6 text-center">
           <div className="w-12 h-12 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4" />
-          <h3 className="font-semibold text-base mb-1">Membuka Kamera...</h3>
+          <h3 className="font-semibold text-base mb-1">{t('openingCamera')}</h3>
         </div>
       )}
 
@@ -92,14 +92,14 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
           <div className="w-14 h-14 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center mb-4 border border-rose-500/30">
             <VideoOff className="w-7 h-7" />
           </div>
-          <h3 className="font-bold text-lg mb-2 text-rose-300">Akses Kamera Diperlukan</h3>
-          <p className="text-xs text-slate-300 max-w-sm mb-5 leading-relaxed">{cameraError}</p>
+          <h3 className="font-bold text-lg mb-2 text-rose-300">{t('cameraNeeded')}</h3>
+          <p className="text-xs text-slate-300 max-w-sm mb-5 leading-relaxed">{t(cameraError === 'denied' ? 'cameraDenied' : 'cameraFailed')}</p>
           <button
             onClick={() => initCamera()}
             className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-lg"
           >
             <RefreshCw className="w-4 h-4" />
-            Coba Lagi
+            {t('tryAgain')}
           </button>
         </div>
       )}
