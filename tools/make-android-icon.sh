@@ -34,8 +34,13 @@ for d in "${!LEGACY[@]}"; do
     -alpha set -compose DstIn -composite "$dir/ic_launcher_round.png"
   # Adaptive foreground: artwork inside the 72/108 safe zone (launchers mask the outer area)
   inner=$((a * 80 / 108))
-  convert -size ${a}x${a} "xc:$BG" \( "$TMP/master.png" -resize ${inner}x${inner} \) \
-    -gravity center -composite "$dir/ic_launcher_foreground.png"
+  # Background = blurred, enlarged artwork so the edge blends in; artwork edges are feathered
+  f=$((inner / 10))
+  convert \( "$TMP/master.png" -resize ${a}x${a} -blur 0x$((a / 12)) \) \
+    \( "$TMP/master.png" -resize ${inner}x${inner} \
+       \( -size ${inner}x${inner} xc:black -fill white -draw "rectangle $f,$f $((inner-f-1)),$((inner-f-1))" -blur 0x$((f / 2 + 1)) \) \
+       -alpha off -compose CopyOpacity -composite \) \
+    -compose Over -gravity center -composite -depth 8 "$dir/ic_launcher_foreground.png"
 done
 
 mkdir -p "$RES/values" "$RES/mipmap-anydpi-v26"
