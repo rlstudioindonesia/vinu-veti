@@ -150,28 +150,79 @@ export class QrPoseStabilizer {
 }
 
 /**
- * Phone rotation from the gyroscope, as camera-space rotation since the last read. For a back camera
- * in portrait the device axes equal the camera axes; rotationRate is in deg/s (alpha = z, beta = x,
- * gamma = y, right-handed).
+ * Ways phones/WebViews report DeviceMotionEvent.rotationRate. The spec says alpha = z, beta = x,
+ * gamma = y (deg/s, right-handed), but axis order and signs differ between devices and WebView
+ * versions. The tracker integrates all candidates and keeps the one that matches what the camera sees.
+ */
+const GYRO_MAPPINGS: Array<(a: number, b: number, g: number) => [number, number, number]> = [
+  (a, b, g) => [b, g, a], // spec
+  (a, b, g) => [-b, -g, -a],
+  (a, b, g) => [a, b, g],
+  (a, b, g) => [-a, -b, -g],
+  (a, b, g) => [g, b, a],
+  (a, b, g) => [-g, -b, -a],
+];
+
+const GYRO_MAPPING_KEY = 'vv_gyro_mapping';
+
+interface GyroSample {
+  t: number;
+  q: THREE.Quaternion[]; // cumulative camera orientation per mapping
+}
+
+/**
+ * Phone rotation from the gyroscope, in camera space. For a back camera in portrait the device axes
+ * equal the camera axes.
+ *
+ * - `take()` gives the rotation since the previous frame (moves the model with the camera).
+ * - `rotationSince(t)` gives the rotation since a past time: a QR reading describes the frame captured
+ *   ~50-100 ms ago, so it is brought forward to "now" before use (otherwise the model trails behind
+ *   when the phone is shaken).
+ * - `calibrate()` compares each axis mapping with the QR movement seen by the camera and selects the
+ *   one that explains it; if none does, the gyroscope is not used at all.
  */
 export class GyroTracker {
-  private pending = new THREE.Quaternion();
+  private cumulative = GYRO_MAPPINGS.map(() => new THREE.Quaternion());
+  private history: GyroSample[] = [];
+  private lastTaken = GYRO_MAPPINGS.map(() => new THREE.Quaternion());
   private lastEventTime = 0;
   private lastEvent = 0;
+  private selected = 0;
+  private scores = GYRO_MAPPINGS.map(() => 0);
+  private noGyroScore = 0;
+  private samples = 0;
+  // Not used until calibrated against the camera (a wrong axis mapping would push the model away);
+  // the result is remembered on the phone so later sessions start calibrated.
+  private trusted = false;
+
+  constructor() {
+    try {
+      const saved = Number(localStorage.getItem(GYRO_MAPPING_KEY));
+      if (Number.isInteger(saved) && saved >= 0 && saved < GYRO_MAPPINGS.length && localStorage.getItem(GYRO_MAPPING_KEY) !== null) {
+        this.selected = saved;
+        this.trusted = true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   private readonly onMotion = (e: DeviceMotionEvent) => {
     const r = e.rotationRate;
     const now = performance.now();
     const dt = this.lastEventTime ? Math.min((now - this.lastEventTime) / 1000, 0.1) : 0;
     this.lastEventTime = now;
     if (!r || r.alpha === null || r.beta === null || r.gamma === null || dt <= 0) return;
-    const w = new THREE.Vector3(r.beta, r.gamma, r.alpha).multiplyScalar(Math.PI / 180);
-    const angle = THREE.MathUtils.degToRad(screen.orientation?.angle ?? 0);
-    w.applyAxisAngle(new THREE.Vector3(0, 0, 1), -angle);
-    const mag = w.length();
-    // Below ~0.8°/s it is sensor noise of a phone lying still, not real rotation
-    if (mag > 0.014 && mag * dt > 1e-5) {
-      this.pending.multiply(new THREE.Quaternion().setFromAxisAngle(w.divideScalar(mag), mag * dt));
-    }
+    const screenAngle = THREE.MathUtils.degToRad(screen.orientation?.angle ?? 0);
+    GYRO_MAPPINGS.forEach((map, i) => {
+      const w = new THREE.Vector3(...map(r.alpha!, r.beta!, r.gamma!)).multiplyScalar(Math.PI / 180);
+      w.applyAxisAngle(new THREE.Vector3(0, 0, 1), -screenAngle);
+      const mag = w.length();
+      // Below ~0.8°/s it is sensor noise of a phone held still, not real rotation
+      if (mag > 0.014) this.cumulative[i].multiply(new THREE.Quaternion().setFromAxisAngle(w.divideScalar(mag), mag * dt));
+    });
+    this.history.push({ t: now, q: this.cumulative.map((q) => q.clone()) });
+    while (this.history.length > 0 && now - this.history[0].t > 1500) this.history.shift();
     this.lastEvent = now;
   };
 
@@ -183,16 +234,81 @@ export class GyroTracker {
     window.removeEventListener('devicemotion', this.onMotion);
   }
 
+  /** Gyroscope present and its axis mapping agrees with the camera. */
   get active(): boolean {
-    return performance.now() - this.lastEvent < 500;
+    return performance.now() - this.lastEvent < 500 && this.trusted;
   }
 
-  /** Camera rotation accumulated since the previous call (null when no gyroscope). */
+  private sampleAt(t: number): GyroSample | null {
+    if (this.history.length === 0) return null;
+    let best = this.history[0];
+    for (const s of this.history) {
+      if (Math.abs(s.t - t) < Math.abs(best.t - t)) best = s;
+      if (s.t > t) break;
+    }
+    return best;
+  }
+
+  /** Camera rotation since the previous call (null when the gyroscope is absent or untrusted). */
   take(): THREE.Quaternion | null {
+    const i = this.selected;
+    const delta = this.lastTaken[i].clone().invert().multiply(this.cumulative[i]);
+    this.lastTaken = this.cumulative.map((q) => q.clone());
+    return this.active ? delta : null;
+  }
+
+  /** Camera rotation between a past time (performance.now() clock) and now. */
+  rotationSince(t: number): THREE.Quaternion | null {
     if (!this.active) return null;
-    const q = this.pending.clone();
-    this.pending.identity();
-    return q;
+    const s = this.sampleAt(t);
+    if (!s) return null;
+    return s.q[this.selected].clone().invert().multiply(this.cumulative[this.selected]);
+  }
+
+  /**
+   * Teach the tracker with two QR readings: the QR centre direction (camera space) at two capture
+   * times. Each mapping predicts the second direction from the first; the best one is selected.
+   */
+  calibrate(dirA: THREE.Vector3, tA: number, dirB: THREE.Vector3, tB: number) {
+    const sa = this.sampleAt(tA);
+    const sb = this.sampleAt(tB);
+    if (!sa || !sb || sa === sb) return;
+    const moved = dirA.angleTo(dirB);
+    if (moved < 0.03 || moved > 0.8) return; // too little motion to judge, or a different QR / glitch
+    const decay = 0.85;
+    this.noGyroScore = this.noGyroScore * decay + moved;
+    GYRO_MAPPINGS.forEach((_, i) => {
+      const camDelta = sa.q[i].clone().invert().multiply(sb.q[i]);
+      const predicted = dirA.clone().applyQuaternion(camDelta.invert());
+      this.scores[i] = this.scores[i] * decay + predicted.angleTo(dirB);
+    });
+    this.samples++;
+    if (this.samples < 3) return;
+    const order = this.scores.map((sc, i) => [sc, i] as const).sort((x, y) => x[0] - y[0]);
+    const [bestScore, best] = order[0];
+    const clearWinner = bestScore < order[1][0] * 0.5 && bestScore < this.noGyroScore * 0.6;
+    if (clearWinner) {
+      if (best !== this.selected) {
+        this.selected = best;
+        this.lastTaken = this.cumulative.map((q) => q.clone());
+      }
+      if (!this.trusted) {
+        try {
+          localStorage.setItem(GYRO_MAPPING_KEY, String(best));
+        } catch {
+          // ignore
+        }
+      }
+      this.trusted = true;
+    } else if (this.trusted && this.scores[this.selected] > this.noGyroScore * 0.9) {
+      // The selected mapping stopped matching the camera: stop using the gyroscope
+      this.trusted = false;
+      try {
+        localStorage.removeItem(GYRO_MAPPING_KEY);
+      } catch {
+        // ignore
+      }
+    }
   }
 }
 
