@@ -4,30 +4,13 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Solid Dark Obsidian Space Base -->
+    <!-- Clean Solid Dark Slate Base -->
     <path
         android:fillColor="#0B0F19"
         android:pathData="M0,0h108v108h-108z" />
 
-    <!-- Ambient Twilight Violet Shade (Bottom-Left to Top-Right) -->
+    <!-- Subtle Premium Radial Accent in center -->
     <path
-        android:fillColor="#151733"
-        android:pathData="M0,108 L108,0 L108,108 Z" />
-
-    <!-- Ambient Emerald Shade at bottom edge -->
-    <path
-        android:fillColor="#0A2422"
-        android:pathData="M0,108 L108,108 L108,80 L0,100 Z" />
-
-    <!-- Subtle Modern Matrix Grid Lines -->
-    <path
-        android:strokeColor="#1806B6D4"
-        android:strokeWidth="0.8"
-        android:pathData="M18,0L18,108 M36,0L36,108 M54,0L54,108 M72,0L72,108 M90,0L90,108 M0,18L108,18 M0,36L108,36 M0,54L108,54 M0,72L108,72 M0,90L108,90" />
-
-    <!-- Dynamic Orbital Circle -->
-    <path
-        android:strokeColor="#258B5CF6"
-        android:strokeWidth="1.2"
-        android:pathData="M54,54 m-36,0 a36,36 0 1,0 72,0 a36,36 0 1,0 -72,0" />
+        android:fillColor="#151D2E"
+        android:pathData="M16,16 L92,16 C98,16 102,20 102,26 L102,82 C102,88 98,92 92,92 L16,92 C10,92 6,88 6,82 L6,26 C6,20 10,16 16,16 Z" />
 </vector>

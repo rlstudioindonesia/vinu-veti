@@ -12,9 +12,9 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
   onBackToHome,
 }) => {
   return (
-    <div className="absolute inset-0 pointer-events-none z-30 flex flex-col justify-between p-3 sm:p-4">
+    <div className="absolute inset-0 pointer-events-none z-30 flex flex-col justify-between p-3 sm:p-5">
       {/* Minimal Top Header - Back Button */}
-      <div className="flex items-center justify-between pointer-events-auto">
+      <div className="flex items-center justify-between pointer-events-auto pt-2 sm:pt-3">
         <button
           onClick={onBackToHome}
           className="p-2.5 rounded-full bg-black/50 hover:bg-black/80 text-white/80 hover:text-white backdrop-blur-md border border-white/10 transition-all active:scale-90"

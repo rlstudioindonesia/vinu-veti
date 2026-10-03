@@ -8,90 +8,16 @@ const STORE_ASSETS = 'assets'; // for 3D GLB & manual audio files
 let dbInstance: IDBDatabase | null = null;
 let dbInitPromise: Promise<IDBDatabase> | null = null;
 
-const DEFAULT_SEEDS: ARQRTarget[] = [
-  {
-    id: 'seed-heart-1',
-    name: 'Anatomi Jantung Manusia 3D',
-    qrCode: 'QR-01',
-    bookPage: 1,
-    description: 'Model 3D interaktif anatomi jantung manusia dengan ventrikel, aorta, dan pembuluh darah.',
-    modelType: 'heart',
-    modelScale: 1.0,
-    rotationSpeed: 0,
-    elevationOffset: 0.15,
-    accentColor: '#ef4444',
-    playAnimation: true,
-    createdAt: Date.now() - 50000,
-    updatedAt: Date.now() - 50000,
-  },
-  {
-    id: 'seed-solar-2',
-    name: 'Tata Surya & Orbit Planet',
-    qrCode: 'QR-02',
-    bookPage: 2,
-    description: 'Sistem tata surya dengan Matahari bercahaya dan planet yang mengorbit nyata.',
-    modelType: 'solar',
-    modelScale: 0.9,
-    rotationSpeed: 0,
-    elevationOffset: 0.2,
-    accentColor: '#f59e0b',
-    playAnimation: true,
-    createdAt: Date.now() - 40000,
-    updatedAt: Date.now() - 40000,
-  },
-  {
-    id: 'seed-trex-3',
-    name: 'Dinosaurus Tyrannosaurus Rex',
-    qrCode: 'QR-03',
-    bookPage: 3,
-    description: 'T-Rex prasejarah hidup dengan rahang membuka dan tekstur sisik reptil 3D.',
-    modelType: 'trex',
-    modelScale: 1.0,
-    rotationSpeed: 0,
-    elevationOffset: 0.1,
-    accentColor: '#10b981',
-    playAnimation: true,
-    createdAt: Date.now() - 30000,
-    updatedAt: Date.now() - 30000,
-  },
-  {
-    id: 'seed-dna-4',
-    name: 'Struktur DNA Helix Ganda',
-    qrCode: 'QR-04',
-    bookPage: 4,
-    description: 'Molekul DNA ganda berwarna dengan ikatan basa nitrogen Adenin, Timin, Guanin, dan Sitosin.',
-    modelType: 'dna',
-    modelScale: 0.95,
-    rotationSpeed: 0,
-    elevationOffset: 0.25,
-    accentColor: '#8b5cf6',
-    playAnimation: true,
-    createdAt: Date.now() - 20000,
-    updatedAt: Date.now() - 20000,
-  },
-  {
-    id: 'seed-rocket-5',
-    name: 'Roket Penjelajah Luar Angkasa',
-    qrCode: 'QR-05',
-    bookPage: 5,
-    description: 'Roket antariksa berkecepatan tinggi dengan sirip aerodinamis dan nyala api thruster.',
-    modelType: 'rocket',
-    modelScale: 0.9,
-    rotationSpeed: 0,
-    elevationOffset: 0.2,
-    accentColor: '#0ea5e9',
-    playAnimation: true,
-    createdAt: Date.now() - 10000,
-    updatedAt: Date.now() - 10000,
-  },
-];
+const DEFAULT_SEEDS: ARQRTarget[] = [];
 
 function arrayBufferToBase64(buffer: ArrayBuffer): string {
   let binary = '';
   const bytes = new Uint8Array(buffer);
   const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  const chunkSize = 0x8000; // 32KB chunks to prevent stack overflow and memory freezes
+  for (let i = 0; i < len; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
   }
   return window.btoa(binary);
 }
@@ -157,16 +83,25 @@ export const ARDatabase = {
     try {
       await getDB();
       const existing = await this.getAllTargets();
-      if (existing.length === 0) {
-        for (const seed of DEFAULT_SEEDS) {
-          await this.saveTarget(seed);
+      // Automatically clean up all dummy seed targets
+      for (const t of existing) {
+        if (t.id.startsWith('seed-')) {
+          await this.deleteTarget(t.id);
         }
       }
     } catch (e) {
       console.warn('Using LocalStorage fallback for metadata:', e);
       const existing = this.getLocalStorageTargets();
-      if (existing.length === 0) {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(DEFAULT_SEEDS));
+      const cleaned = existing.filter((t) => !t.id.startsWith('seed-'));
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cleaned));
+    }
+  },
+
+  async clearAllDummyTargets(): Promise<void> {
+    const existing = await this.getAllTargets();
+    for (const t of existing) {
+      if (t.id.startsWith('seed-')) {
+        await this.deleteTarget(t.id);
       }
     }
   },
@@ -218,11 +153,13 @@ export const ARDatabase = {
   },
 
   async findTargetByBarcode(qrValue: string): Promise<ARQRTarget | null> {
-    const clean = qrValue.trim().toLowerCase();
+    const clean = (qrValue || '').trim().toLowerCase();
+    if (!clean) return null;
     const targets = await this.getAllTargets();
     const match = targets.find((t) => {
       const targetClean = (t.qrCode || '').trim().toLowerCase();
-      return targetClean === clean || clean.includes(targetClean) || targetClean.includes(clean);
+      if (!targetClean) return false;
+      return targetClean === clean;
     });
     return match || null;
   },
@@ -300,8 +237,10 @@ export const ARDatabase = {
       const bridge = typeof window !== 'undefined' ? (window as unknown as { AndroidBridge?: { saveModelBase64?: (id: string, b64: string) => string } }).AndroidBridge : undefined;
       if (bridge?.saveModelBase64) {
         const buffer = fileData instanceof Blob ? await fileData.arrayBuffer() : fileData;
-        const b64 = arrayBufferToBase64(buffer);
-        bridge.saveModelBase64(id, b64);
+        if (buffer.byteLength < 8 * 1024 * 1024) {
+          const b64 = arrayBufferToBase64(buffer);
+          bridge.saveModelBase64(id, b64);
+        }
       }
     } catch (err) {
       console.warn('Native model storage bridge note:', err);
@@ -345,8 +284,10 @@ export const ARDatabase = {
       const bridge = typeof window !== 'undefined' ? (window as unknown as { AndroidBridge?: { saveAudioBase64?: (id: string, b64: string) => string } }).AndroidBridge : undefined;
       if (bridge?.saveAudioBase64) {
         const buffer = fileData instanceof Blob ? await fileData.arrayBuffer() : fileData;
-        const b64 = arrayBufferToBase64(buffer);
-        bridge.saveAudioBase64(id, b64);
+        if (buffer.byteLength < 8 * 1024 * 1024) {
+          const b64 = arrayBufferToBase64(buffer);
+          bridge.saveAudioBase64(id, b64);
+        }
       }
     } catch (err) {
       console.warn('Native audio storage bridge note:', err);

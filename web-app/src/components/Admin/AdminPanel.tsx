@@ -110,24 +110,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const file = e.target.files?.[0];
     if (!file || !editingTarget) return;
 
-    if (!file.name.toLowerCase().endsWith('.glb') && !file.name.toLowerCase().endsWith('.gltf')) {
-      setFormError('Harap unggah file 3D berformat .glb atau .gltf');
-      return;
-    }
-
     try {
       const arrayBuffer = await file.arrayBuffer();
       await ARDatabase.saveAssetBlob(editingTarget.id, arrayBuffer, file.name);
       setCurrentUploadedGlb(arrayBuffer);
       setEditingTarget({
         ...editingTarget,
+        modelType: 'custom_glb',
         customGlbFileName: file.name,
       });
       const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
       setUploadFileName(file.name);
       setUploadFileSize(`${sizeMB} MB`);
       setFormError(null);
-      showNotice(`Model utama "${file.name}" (${sizeMB} MB) siap disimpan!`);
+      showNotice(`Model 3D "${file.name}" (${sizeMB} MB) berhasil diunggah!`);
     } catch (err) {
       console.error(err);
       setFormError('Gagal memproses file .GLB');
@@ -138,11 +134,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleAddExtraGlb = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !editingTarget) return;
-
-    if (!file.name.toLowerCase().endsWith('.glb') && !file.name.toLowerCase().endsWith('.gltf')) {
-      setFormError('Harap unggah file 3D berformat .glb atau .gltf');
-      return;
-    }
 
     try {
       const subId = `${editingTarget.id}_sub_${Date.now()}`;
@@ -235,13 +226,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         rotationSpeed: 0,
       };
       await ARDatabase.saveTarget(toSave);
+
+      // Auto-mirror remote online GLB to local storage for kids offline mode
+      if (toSave.customGlbUrl && toSave.customGlbUrl.startsWith('http')) {
+        try {
+          const res = await fetch(toSave.customGlbUrl);
+          if (res.ok) {
+            const buf = await res.arrayBuffer();
+            await ARDatabase.saveAssetBlob(toSave.id, buf, `${toSave.id}.glb`);
+          }
+        } catch (fetchErr) {
+          console.warn('Pre-mirroring GLB note:', fetchErr);
+        }
+      }
+
       realtimeSync.broadcast(
         isCreatingNew ? 'TARGET_CREATED' : 'TARGET_UPDATED',
         toSave.id
       );
       await onRefreshTargets();
       setIsSaving(false);
-      showNotice('Stiker QR & Model 3D berhasil disimpan!');
+      showNotice('Stiker QR berhasil dibuat & data 3D tersimpan untuk mode offline!');
       setEditingTarget(null);
     } catch (err) {
       setIsSaving(false);
@@ -270,49 +275,60 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xl text-white flex flex-col overflow-hidden animate-in fade-in duration-200">
-      {/* Top Header Bar */}
-      <div className="h-14 px-4 sm:px-6 bg-slate-900/90 border-b border-white/10 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3">
+      {/* Top Header Bar with Safe Physical Camera Spacing */}
+      <div className="pt-10 sm:pt-12 pb-3.5 px-4 sm:px-6 bg-slate-950 border-b border-slate-800 shrink-0 shadow-xl space-y-3">
+        {/* Row 1: Back Navigation and Action Buttons */}
+        <div className="flex items-center justify-between gap-2">
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-slate-200 transition-colors flex items-center gap-1.5 text-xs font-semibold"
+            className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-white border border-slate-600 transition-all flex items-center gap-1.5 text-xs font-bold shadow-sm cursor-pointer shrink-0"
           >
             <X className="w-4 h-4 text-emerald-400" />
-            <span className="hidden sm:inline">Tutup</span>
+            <span>Kembali</span>
           </button>
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 shrink-0">
-              <VinuVetiLogo className="w-full h-full" showGlow={false} />
-            </div>
-            <h2 className="font-bold text-sm sm:text-base">Vinu Veti - Kelola Stiker</h2>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {onOpenPrivacy && (
+              <button
+                onClick={onOpenPrivacy}
+                className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold border border-white/10 cursor-pointer"
+                title="Kebijakan Privasi"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden sm:inline">Privasi</span>
+              </button>
+            )}
+            <button
+              onClick={onOpenPrintModal}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-white/10 active:scale-95 cursor-pointer shrink-0"
+            >
+              <Printer className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Cetak QR</span>
+            </button>
+            <button
+              onClick={handleStartCreate}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md transition-all cursor-pointer shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Tambah Stiker</span>
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {onOpenPrivacy && (
-            <button
-              onClick={onOpenPrivacy}
-              className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 text-xs font-semibold border border-white/10"
-              title="Kebijakan Privasi"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">Privasi</span>
-            </button>
-          )}
-          <button
-            onClick={onOpenPrintModal}
-            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border border-white/10 active:scale-95"
-          >
-            <Printer className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Cetak Stiker QR</span>
-          </button>
-          <button
-            onClick={handleStartCreate}
-            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md active:scale-95 transition-transform"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Tambah Stiker</span>
-          </button>
+        {/* Row 2: Logo Brand, Panel Title, and Offline Mirroring Badge */}
+        <div className="flex items-center justify-between gap-3 pt-1 border-t border-slate-800/80">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-7 h-7 shrink-0">
+              <VinuVetiLogo className="w-full h-full" showGlow={false} />
+            </div>
+            <h2 className="font-bold text-sm sm:text-base text-white tracking-wide truncate">
+              Kelola Stiker & Model 3D
+            </h2>
+          </div>
+          <div className="flex items-center gap-1.5 text-[10px] text-emerald-300 bg-emerald-950/70 border border-emerald-500/30 px-2.5 py-1 rounded-full font-bold shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Mode Offline Siap</span>
+          </div>
         </div>
       </div>
 
@@ -334,9 +350,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             onChange={(e) => setSearchTerm(e.target.value)}
             className="bg-slate-900/80 border border-slate-700/80 rounded-xl px-3.5 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-hidden focus:border-emerald-500 flex-1 max-w-sm"
           />
-          <span className="text-xs text-slate-400">
-            Total: <strong className="text-white">{targets.length}</strong> stiker
-          </span>
+          <div className="flex items-center gap-2">
+            {targets.length > 0 && (
+              <button
+                onClick={async () => {
+                  if (window.confirm('Hapus semua stiker dummy bawaan? Stiker yang Anda buat sendiri tidak akan terhapus.')) {
+                    await ARDatabase.clearAllDummyTargets();
+                    await onRefreshTargets();
+                    showNotice('Aset stiker dummy telah dibersihkan!');
+                  }
+                }}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-950 text-rose-300 hover:text-rose-200 border border-rose-500/30 text-xs font-semibold flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+                title="Bersihkan Stiker Dummy Bawaan"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                <span className="hidden sm:inline">Hapus Dummy</span>
+              </button>
+            )}
+            <span className="text-xs text-slate-400">
+              Total: <strong className="text-white">{targets.length}</strong> stiker
+            </span>
+          </div>
         </div>
 
         {filteredTargets.length === 0 ? (
@@ -425,16 +459,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
       {/* Edit / Create QR Sticker Modal */}
       {editingTarget && (
-        <div className="fixed inset-0 z-60 bg-black/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden text-white">
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between shrink-0">
-              <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
+        <div className="fixed inset-0 z-60 bg-black/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 pt-12 sm:pt-6 overflow-y-auto animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden text-white">
+            <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
+              <h3 className="font-extrabold text-sm sm:text-base flex items-center gap-2 text-white">
                 <QrCode className="w-4 h-4 text-emerald-400" />
-                {isCreatingNew ? 'Tambah Stiker QR & Model 3D' : 'Edit Stiker QR & Model 3D'}
+                <span>{isCreatingNew ? 'Tambah Stiker QR & Model 3D' : 'Edit Stiker QR & Model 3D'}</span>
               </h3>
               <button
                 onClick={() => setEditingTarget(null)}
-                className="p-1 rounded-full text-slate-400 hover:text-white"
+                className="p-1.5 rounded-full text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -532,7 +566,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </span>
                     <input
                       type="file"
-                      accept=".glb,.gltf"
+                      accept=".glb,.gltf,model/gltf-binary,model/gltf+json,application/octet-stream,*/*"
                       onChange={handleGlbUpload}
                       className="hidden"
                     />
@@ -546,6 +580,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       'Pilih model 3D .GLB Anda sendiri (animasi bawaan akan otomatis berputar)'
                     )}
                   </p>
+
+                  {/* Or Direct Online URL / Bundled Path */}
+                  <div className="mt-3 pt-2.5 border-t border-slate-800 text-left">
+                    <span className="text-[10px] text-slate-400 font-medium block mb-1">
+                      Atau Masukkan Tautan Web / File Bundled .GLB:
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Contoh: https://.../model.glb atau /models/dino.glb"
+                      value={editingTarget.customGlbUrl || ''}
+                      onChange={(e) =>
+                        setEditingTarget({
+                          ...editingTarget,
+                          modelType: 'custom_glb',
+                          customGlbUrl: e.target.value,
+                        })
+                      }
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono placeholder-slate-500 focus:outline-hidden focus:border-emerald-500"
+                    />
+                  </div>
                 </div>
 
                 {/* Additional assets attached to this QR */}
@@ -560,7 +614,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       + Tambah Aset
                       <input
                         type="file"
-                        accept=".glb,.gltf"
+                        accept=".glb,.gltf,model/gltf-binary,model/gltf+json,application/octet-stream,*/*"
                         onChange={handleAddExtraGlb}
                         className="hidden"
                       />
@@ -661,7 +715,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       Pilih File Audio
                       <input
                         type="file"
-                        accept="audio/*"
+                        accept="audio/*,.mp3,.wav,.ogg,.m4a,*/*"
                         onChange={handleAudioUpload}
                         className="hidden"
                       />

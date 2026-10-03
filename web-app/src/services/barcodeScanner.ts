@@ -51,27 +51,59 @@ export class BarcodeScannerService {
     this.stopCamera();
     this.activeFacingMode = facingMode;
 
-    const constraints: MediaStreamConstraints = {
-      video: {
-        facingMode: { ideal: facingMode },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-      audio: false,
-    };
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      this.currentStream = stream;
-      videoElement.srcObject = stream;
-      videoElement.setAttribute('playsinline', 'true');
-      videoElement.muted = true;
-      await videoElement.play();
-      return stream;
-    } catch (err) {
-      console.error('Failed to start camera:', err);
-      throw err;
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      throw new Error('Kamera tidak didukung pada browser ini');
     }
+
+    const tryConstraints: MediaStreamConstraints[] = [
+      {
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      },
+      {
+        video: {
+          facingMode: facingMode === 'user' ? 'user' : 'environment',
+        },
+        audio: false,
+      },
+      {
+        video: true,
+        audio: false,
+      },
+    ];
+
+    let stream: MediaStream | null = null;
+    let lastErr: unknown = null;
+
+    for (const c of tryConstraints) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(c);
+        if (stream) break;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+
+    if (!stream) {
+      console.error('All camera constraint attempts failed:', lastErr);
+      throw lastErr || new Error('Gagal mengaktifkan kamera perangkat');
+    }
+
+    this.currentStream = stream;
+    videoElement.srcObject = stream;
+    videoElement.setAttribute('playsinline', 'true');
+    videoElement.setAttribute('webkit-playsinline', 'true');
+    videoElement.muted = true;
+    try {
+      await videoElement.play();
+    } catch (e) {
+      console.warn('Video auto-play deferred/handled:', e);
+    }
+    return stream;
   }
 
   public stopCamera() {

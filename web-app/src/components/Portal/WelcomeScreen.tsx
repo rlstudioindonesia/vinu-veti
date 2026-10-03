@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Camera, Lock, ShieldCheck, Sparkles, BookOpen, Volume2, VolumeX, Eye, Star, Heart, Rocket } from 'lucide-react';
 import { ARQRTarget } from '../../types/arBook';
-import { KidsMascot } from '../Common/KidsMascot';
 import { VinuVetiLogo } from '../Common/VinuVetiLogo';
 import { soundService } from '../../services/soundService';
 
@@ -62,32 +61,32 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
       </div>
 
       {/* Top Header: Sound Toggle & Parent Shortcut */}
-      <div className="relative z-10 w-full px-4 pt-4 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2 bg-white/20 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/30 shadow-sm">
-          <div className="w-5 h-5">
+      <div className="relative z-10 w-full px-4 pt-4 sm:pt-6 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2 bg-slate-950/85 backdrop-blur-md px-3.5 py-1.5 rounded-full border-2 border-white/40 shadow-xl ring-1 ring-black/30">
+          <div className="w-5 h-5 shrink-0">
             <VinuVetiLogo className="w-full h-full" showGlow={false} />
           </div>
-          <span className="font-extrabold text-xs tracking-wider text-amber-200">VINU VETI</span>
+          <span className="font-black text-xs tracking-wider text-amber-300 drop-shadow-sm">VINU VETI</span>
         </div>
 
         <div className="flex items-center gap-2">
           {/* Sound Mute/Unmute */}
           <button
             onClick={() => setSoundEnabled(!soundEnabled)}
-            className="p-2.5 rounded-full bg-white/20 hover:bg-white/30 active:scale-90 text-white backdrop-blur-md border border-white/30 shadow-sm transition-all"
+            className="p-2 rounded-full bg-slate-950/85 hover:bg-slate-900 active:scale-90 text-white backdrop-blur-md border-2 border-white/40 shadow-xl transition-all"
             title="Suara"
           >
-            {soundEnabled ? <Volume2 className="w-4 h-4 text-amber-200" /> : <VolumeX className="w-4 h-4 text-white/60" />}
+            {soundEnabled ? <Volume2 className="w-4 h-4 text-amber-300" /> : <VolumeX className="w-4 h-4 text-white/60" />}
           </button>
 
           {/* Parent & Teacher Lock Button */}
           <button
             onClick={onOpenAdmin}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/60 hover:bg-slate-900/80 active:scale-95 text-white/90 text-[11px] font-bold border border-white/20 backdrop-blur-md shadow-sm transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-950/90 hover:bg-black active:scale-95 text-white font-extrabold text-xs border-2 border-white/40 backdrop-blur-md shadow-xl transition-all cursor-pointer"
             title="Area Orang Tua & Guru"
           >
             <Lock className="w-3.5 h-3.5 text-amber-300" />
-            <span>Guru & Ortu</span>
+            <span className="text-white font-bold">Guru & Ortu</span>
           </button>
         </div>
       </div>
@@ -122,19 +121,20 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
           </button>
         </div>
 
-        {/* Mascot Centerpiece on Floating Rainbow Cloud */}
-        <div className="relative my-2 flex flex-col items-center">
-          {/* Cloud Base */}
-          <div className="absolute -bottom-4 w-48 h-12 bg-white/35 backdrop-blur-md rounded-full shadow-xl border border-white/40" />
+        {/* Elegant Clean Brand Centerpiece */}
+        <div className="relative my-4 flex flex-col items-center">
+          {/* Subtle glowing halo */}
+          <div className="absolute -inset-4 bg-emerald-500/20 rounded-full blur-2xl animate-pulse" />
 
-          {/* Dino Mascot */}
-          <KidsMascot className="w-36 h-36 relative z-10" />
+          {/* Elegant Vinu Veti Logo Squircle */}
+          <div className="w-28 h-28 sm:w-32 sm:h-32 relative z-10 drop-shadow-[0_12px_24px_rgba(0,0,0,0.4)] transition-transform duration-300 hover:scale-105 active:scale-95">
+            <VinuVetiLogo className="w-full h-full" showGlow={false} />
+          </div>
 
-          {/* Cheerful Speech Bubble */}
-          <div className="relative -mt-2 z-20 bg-white text-slate-900 font-extrabold text-xs px-3.5 py-1.5 rounded-2xl shadow-xl border-2 border-amber-300 max-w-[240px] animate-bounce">
-            👋 Halo temanku! Ayo bermain 3D!
-            {/* Bubble Tail */}
-            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-0 h-0 border-x-6 border-x-transparent border-t-6 border-t-white" />
+          {/* Clean Elegant Sub-badge */}
+          <div className="relative mt-3 z-20 bg-slate-950/85 backdrop-blur-md text-white font-extrabold text-xs px-4 py-1.5 rounded-full shadow-xl border border-white/20 flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            <span className="text-emerald-300 font-bold">Augmented Reality 3D</span>
           </div>
         </div>
 

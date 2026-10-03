@@ -14,6 +14,7 @@ export interface ARQRTarget {
   modelType: 'custom_glb' | 'heart' | 'solar' | 'trex' | 'dna' | 'rocket';
   customGlbFileName?: string;
   customGlbData?: string;
+  customGlbUrl?: string;
   assets?: ARQRTargetAsset[]; // Can store multiple 3D assets for 1 QR sticker
   modelScale: number; // default 1.0
   rotationSpeed: number; // default 0 (object does not rotate automatically)

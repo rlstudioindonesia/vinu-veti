@@ -76,6 +76,10 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
           const res = await loadCustomGlbModel(customBlobData);
           modelGroup = res.scene;
           animations = res.animations;
+        } else if (target.customGlbUrl) {
+          const res = await loadCustomGlbModel(target.customGlbUrl);
+          modelGroup = res.scene;
+          animations = res.animations;
         } else {
           const storedBlob = await ARDatabase.getAssetBlob(target.id);
           if (storedBlob) {

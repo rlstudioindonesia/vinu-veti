@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ARQRTarget } from './types/arBook';
 import { ARDatabase } from './services/db';
 import { realtimeSync } from './services/realtimeSync';
@@ -21,6 +21,7 @@ export default function App() {
   const [activeTarget, setActiveTarget] = useState<ARQRTarget | null>(null);
   const [qrAnchor, setQrAnchor] = useState<QRAnchor | null>(null);
   const [activeAssetIndex, setActiveAssetIndex] = useState<number>(0);
+  const qrLossTimerRef = useRef<number | null>(null);
 
   // Modals
   const [isAdminLoginOpen, setIsAdminLoginOpen] = useState<boolean>(false);
@@ -59,11 +60,10 @@ export default function App() {
   // Handle QR Scan from Real Camera Feed
   const handleQRDetected = useCallback(
     async (code: string, anchor?: QRAnchor) => {
-      if (anchor) {
-        setQrAnchor(anchor);
-      }
+      if (!code || !code.trim() || !anchor) return;
       const matched = await ARDatabase.findTargetByBarcode(code);
       if (matched) {
+        setQrAnchor(anchor);
         if (!activeTarget || activeTarget.id !== matched.id) {
           soundService.playScanBeep();
           setActiveAssetIndex(0);
@@ -77,6 +77,15 @@ export default function App() {
           }
         }
         setActiveTarget(matched);
+
+        // Reset QR loss timer (if QR leaves camera frame, clear after 1.6s)
+        if (qrLossTimerRef.current) {
+          window.clearTimeout(qrLossTimerRef.current);
+        }
+        qrLossTimerRef.current = window.setTimeout(() => {
+          setQrAnchor(null);
+          setActiveTarget(null);
+        }, 1600);
       }
     },
     [activeTarget]
@@ -129,7 +138,11 @@ export default function App() {
       {/* 2. Simple Home Screen (Mulai Kamera, Admin & Privasi) */}
       {!isLoadingApp && currentView === 'portal' && (
         <WelcomeScreen
-          onStartCamera={() => setCurrentView('ar')}
+          onStartCamera={() => {
+            setActiveTarget(null);
+            setQrAnchor(null);
+            setCurrentView('ar');
+          }}
           onOpenAdmin={handleOpenAdmin}
           onOpenPrivacy={() => setIsPrivacyModalOpen(true)}
           targets={targets}

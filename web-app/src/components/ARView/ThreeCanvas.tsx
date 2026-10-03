@@ -183,7 +183,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
         const bridge = typeof window !== 'undefined' ? (window as unknown as { AndroidBridge?: { getModelUrl?: (id: string) => string } }).AndroidBridge : undefined;
         const nativeUrl = bridge?.getModelUrl ? bridge.getModelUrl(activeId) : '';
 
-        if (nativeUrl) {
+        if (target.customGlbUrl) {
+          const glbRes = await loadCustomGlbModel(target.customGlbUrl);
+          modelGroup = glbRes.scene;
+          clips = glbRes.animations || [];
+        } else if (nativeUrl) {
           const glbRes = await loadCustomGlbModel(nativeUrl);
           modelGroup = glbRes.scene;
           clips = glbRes.animations || [];
@@ -302,22 +306,27 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       }
 
       const model = currentModelGroupRef.current;
-      if (model && target) {
-        // Interpolate position smoothly to physical QR code coordinates
-        const lerpFactor = 0.18;
-        current3DPosRef.current.lerp(target3DPosRef.current, lerpFactor);
+      if (model) {
+        if (!target || !qrAnchor) {
+          model.visible = false;
+        } else {
+          model.visible = true;
+          // Interpolate position smoothly to physical QR code coordinates
+          const lerpFactor = 0.22;
+          current3DPosRef.current.lerp(target3DPosRef.current, lerpFactor);
 
-        model.position.x = current3DPosRef.current.x;
-        model.position.y = current3DPosRef.current.y + (target.elevationOffset || 0);
-        model.position.z = current3DPosRef.current.z;
+          model.position.x = current3DPosRef.current.x;
+          model.position.y = current3DPosRef.current.y + (target.elevationOffset || 0);
+          model.position.z = current3DPosRef.current.z;
 
-        // Rotation from touch or subtle rotation
-        model.rotation.copy(rotationEulerRef.current);
+          // Rotation from touch or subtle rotation
+          model.rotation.copy(rotationEulerRef.current);
 
-        // Apply scale
-        const baseScale = target.modelScale || 1.0;
-        const totalScale = baseScale * userScaleMultiplierRef.current;
-        model.scale.set(totalScale, totalScale, totalScale);
+          // Apply scale
+          const baseScale = target.modelScale || 1.0;
+          const totalScale = baseScale * userScaleMultiplierRef.current;
+          model.scale.set(totalScale, totalScale, totalScale);
+        }
       }
 
       if (rendererRef.current && sceneRef.current && cameraRef.current) {

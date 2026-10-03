@@ -37,10 +37,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,6 +53,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -168,15 +171,6 @@ class NativeStorageBridge(private val context: Context) {
 
 class MainActivity : ComponentActivity() {
 
-  companion object {
-    init {
-      try {
-        android.system.Os.setenv("LIBGL_ALWAYS_SOFTWARE", "1", true)
-      } catch (_: Throwable) {
-      }
-    }
-  }
-
   private var fileUploadCallback: ValueCallback<Array<Uri>>? = null
 
   private val fileChooserLauncher =
@@ -261,11 +255,16 @@ fun ARBookScreen(
     }
   }
 
-  Surface(
+  Scaffold(
     modifier = modifier.fillMaxSize(),
-    color = Color.Black
-  ) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    contentWindowInsets = WindowInsets.safeDrawing,
+    containerColor = Color.Black
+  ) { innerPadding ->
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(innerPadding)
+    ) {
       // Modern Android WebView wrapped in AndroidView
       AndroidView(
         modifier = Modifier
@@ -310,11 +309,27 @@ fun ARBookScreen(
 
             webChromeClient = object : WebChromeClient() {
               override fun onPermissionRequest(request: PermissionRequest) {
-                if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                  request.grant(request.resources)
-                } else {
-                  pendingPermissionRequest = request
-                  cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                  val resourcesToGrant = mutableListOf<String>()
+                  for (res in request.resources) {
+                    if (res == PermissionRequest.RESOURCE_VIDEO_CAPTURE) {
+                      if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                        resourcesToGrant.add(res)
+                      }
+                    } else if (res == PermissionRequest.RESOURCE_AUDIO_CAPTURE) {
+                      if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                        resourcesToGrant.add(res)
+                      }
+                    } else {
+                      resourcesToGrant.add(res)
+                    }
+                  }
+                  if (resourcesToGrant.isNotEmpty()) {
+                    request.grant(resourcesToGrant.toTypedArray())
+                  } else {
+                    pendingPermissionRequest = request
+                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                  }
                 }
               }
 
@@ -324,9 +339,20 @@ fun ARBookScreen(
                 fileChooserParams: FileChooserParams?
               ): Boolean {
                 if (filePathCallback == null) return false
-                val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                   type = "*/*"
                   addCategory(Intent.CATEGORY_OPENABLE)
+                  putExtra(
+                    Intent.EXTRA_MIME_TYPES,
+                    arrayOf(
+                      "model/gltf-binary",
+                      "model/gltf+json",
+                      "application/octet-stream",
+                      "application/json",
+                      "audio/*",
+                      "*/*"
+                    )
+                  )
                 }
                 onOpenFileChooser(filePathCallback, intent)
                 return true
