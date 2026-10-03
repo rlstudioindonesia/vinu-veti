@@ -49,6 +49,9 @@ const VOICE_LABELS: Record<VoiceLang, { flag: string; label: string }> = {
   tl: { flag: '🇵🇭', label: 'Tagalog' },
 };
 
+// Models bigger than this are compressed automatically on upload
+const COMPRESS_ABOVE = 5 * 1024 * 1024;
+
 const GLB_ACCEPT = '.glb,model/gltf-binary,application/octet-stream';
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -70,6 +73,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [pendingMain, setPendingMain] = useState<PendingFile | null>(null);
   const [pendingExtras, setPendingExtras] = useState<Record<string, PendingFile>>({});
   const [removedExtraIds, setRemovedExtraIds] = useState<string[]>([]);
+  const [compressing, setCompressing] = useState<string | null>(null);
+  const [autoCompress, setAutoCompress] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('vv_auto_compress') !== 'off';
+    } catch {
+      return true;
+    }
+  });
   const [pendingVoices, setPendingVoices] = useState<Partial<Record<VoiceLang, PendingFile>>>({});
   const [removedVoices, setRemovedVoices] = useState<VoiceLang[]>([]);
   const [playingVoice, setPlayingVoice] = useState<VoiceLang | null>(null);
@@ -152,29 +163,55 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const sizeWarning = (f: PendingFile) => {
     const mb = f.data.byteLength / 1048576;
     return mb > 15
-      ? `Model ${mb.toFixed(1)} MB cukup berat. Disarankan kompres dulu (lihat docs/SUPABASE.md, bagian "Model ringan") agar cepat diunduh.`
+      ? `Model masih ${mb.toFixed(1)} MB setelah dikompres. Masih bisa dipublikasikan (dipecah otomatis), tapi unduhan untuk anak akan lama.`
       : null;
   };
 
+  /**
+   * Big models are compressed in the app (textures → WebP max 2048 px, Meshopt geometry), usually
+   * 5-15x smaller, so they upload past the 50 MB limit and download fast on kids' phones.
+   */
+  const maybeCompress = async (f: PendingFile): Promise<PendingFile> => {
+    if (!autoCompress || f.data.byteLength < COMPRESS_ABOVE) return f;
+    setCompressing('Mengompres model…');
+    try {
+      const { compressGlb } = await import('../../utils/glbCompress');
+      const res = await compressGlb(f.data, (msg) => setCompressing(msg));
+      if (res.after < res.before) {
+        showNotice(`Model dikompres: ${(res.before / 1048576).toFixed(1)} MB → ${(res.after / 1048576).toFixed(1)} MB`);
+        return { data: res.data, name: f.name };
+      }
+      return f;
+    } catch (err) {
+      console.warn('Compression failed, keeping the original:', err);
+      showNotice('Model tidak bisa dikompres, file asli dipakai.');
+      return f;
+    } finally {
+      setCompressing(null);
+    }
+  };
+
   const handleGlbUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = await readFile(e);
+    let f = await readFile(e);
     if (!f || !editingTarget) return;
     if (!isGlb(f)) {
       setFormError('File bukan model .GLB yang valid. Ekspor model sebagai glTF Binary (.glb).');
       return;
     }
+    f = await maybeCompress(f);
     setPendingMain(f);
     setEditingTarget({ ...editingTarget, customGlbFileName: f.name, customGlbUrl: undefined });
     setFormError(sizeWarning(f));
   };
 
   const handleAddExtraGlb = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = await readFile(e);
+    let f = await readFile(e);
     if (!f || !editingTarget) return;
     if (!isGlb(f)) {
       setFormError('File bukan model .GLB yang valid.');
       return;
     }
+    f = await maybeCompress(f);
     const subId = `${editingTarget.id}_sub_${Date.now()}`;
     const asset: ARQRTargetAsset = { id: subId, name: f.name.replace(/\.[^/.]+$/, ''), fileName: f.name };
     setPendingExtras({ ...pendingExtras, [subId]: f });
@@ -574,6 +611,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   di kamera AR, anak cukup <strong className="text-emerald-300">menyentuh karakternya</strong> untuk
                   berganti ke gerakan berikutnya (tanpa tombol, QR tetap sama).
                 </p>
+                <label className="flex items-center gap-2 text-[10px] text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoCompress}
+                    onChange={(e) => {
+                      setAutoCompress(e.target.checked);
+                      try {
+                        localStorage.setItem('vv_auto_compress', e.target.checked ? 'on' : 'off');
+                      } catch {
+                        // ignore
+                      }
+                    }}
+                    className="accent-emerald-500 rounded"
+                  />
+                  Kompres otomatis file di atas 5 MB (disarankan: lebih ringan untuk HP anak, lolos batas 50 MB)
+                </label>
+                {compressing && (
+                  <div className="flex items-center gap-2 rounded-xl bg-emerald-600/20 px-3 py-2 text-[11px] font-semibold text-emerald-200">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+                    {compressing}
+                  </div>
+                )}
 
                 <div className="border border-dashed border-emerald-500/40 rounded-xl p-3 bg-emerald-500/5 text-center">
                   <Upload className="w-5 h-5 text-emerald-400 mx-auto mb-1.5" />
@@ -755,7 +814,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={isBusy}
+                disabled={isBusy || !!compressing}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md active:scale-95"
               >
                 {isBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}

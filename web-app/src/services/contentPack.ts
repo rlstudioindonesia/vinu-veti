@@ -13,7 +13,7 @@
 import { unzipSync, zipSync, strToU8, strFromU8, Zippable } from 'fflate';
 import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
 import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, resolveAudioSource, resolveModelSource, voiceOf } from './db';
-import { REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
+import { partCount, REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
 
 export interface PackFile {
   file: string; // path relative to the manifest
@@ -83,10 +83,25 @@ export async function fetchManifest(base: string, timeoutMs: number): Promise<Co
   }
 }
 
-async function download(url: string): Promise<ArrayBuffer> {
-  const res = await fetchWithTimeout(url, 180000);
-  if (!res.ok) throw new Error(`Download gagal (${res.status}): ${url}`);
-  return res.arrayBuffer();
+async function download(url: string, size?: number): Promise<ArrayBuffer> {
+  // Big files are stored online in parts (see CHUNK_SIZE); files inside the APK are always whole
+  const parts = url.startsWith(BUNDLED_BASE) ? 0 : partCount(size);
+  if (parts === 0) {
+    const res = await fetchWithTimeout(url, 180000);
+    if (!res.ok) throw new Error(`Download gagal (${res.status}): ${url}`);
+    return res.arrayBuffer();
+  }
+  const out = new Uint8Array(size!);
+  let offset = 0;
+  for (let i = 0; i < parts; i++) {
+    const res = await fetchWithTimeout(`${url}.part${i}`, 300000);
+    if (!res.ok) throw new Error(`Download gagal (${res.status}): ${url}.part${i}`);
+    const chunk = new Uint8Array(await res.arrayBuffer());
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  if (offset !== size) throw new Error(`Ukuran file tidak cocok: ${url}`);
+  return out.buffer;
 }
 
 function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
@@ -117,19 +132,20 @@ interface MirrorJob {
   lang?: VoiceLang;
   url: string;
   sha?: string;
+  size?: number;
   name: string;
 }
 
 function mirrorJobs(p: PackTarget, t: ARQRTarget): MirrorJob[] {
   const jobs: MirrorJob[] = [];
-  if (t.customGlbUrl) jobs.push({ key: t.id, id: t.id, kind: 'model', url: t.customGlbUrl, sha: p.modelSha, name: p.modelName || `${t.id}.glb` });
+  if (t.customGlbUrl) jobs.push({ key: t.id, id: t.id, kind: 'model', url: t.customGlbUrl, sha: p.modelSha, size: p.modelSize, name: p.modelName || `${t.id}.glb` });
   (t.assets || []).forEach((a, i) => {
-    if (a.url) jobs.push({ key: a.id, id: a.id, kind: 'model', url: a.url, sha: p.assets?.[i]?.sha, name: a.fileName });
+    if (a.url) jobs.push({ key: a.id, id: a.id, kind: 'model', url: a.url, sha: p.assets?.[i]?.sha, size: p.assets?.[i]?.size, name: a.fileName });
   });
   const voices = packVoices(p);
   VOICE_LANGS.forEach((lang) => {
     const url = t.voices?.[lang]?.url;
-    if (url) jobs.push({ key: audioKey(t.id, lang), id: t.id, kind: 'audio', lang, url, sha: voices[lang]?.sha, name: voices[lang]?.name || 'audio' });
+    if (url) jobs.push({ key: audioKey(t.id, lang), id: t.id, kind: 'audio', lang, url, sha: voices[lang]?.sha, size: voices[lang]?.size, name: voices[lang]?.name || 'audio' });
   });
   return jobs;
 }
@@ -263,7 +279,7 @@ export async function syncContentPack(
   if (queue.length > 0) onProgress?.({ done: 0, total: queue.length });
   for (const job of queue) {
     try {
-      const data = await download(job.url);
+      const data = await download(job.url, job.size);
       const sha = job.sha || (await sha256Hex(data));
       if (job.kind === 'model') await ARDatabase.saveAssetBlob(job.id, data, job.name, sha);
       else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha, job.lang);

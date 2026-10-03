@@ -9,7 +9,7 @@
  */
 import { ARQRTarget } from '../types/arBook';
 import { buildManifest, fetchManifest } from './contentPack';
-import { REMOTE_CONTENT_BASE, SUPABASE_ANON_KEY, SUPABASE_BUCKET, SUPABASE_URL } from './cloudConfig';
+import { CHUNK_SIZE, partCount, REMOTE_CONTENT_BASE, SUPABASE_ANON_KEY, SUPABASE_BUCKET, SUPABASE_URL } from './cloudConfig';
 
 interface Session {
   access_token: string;
@@ -170,13 +170,19 @@ export async function publishToCloud(
     targets,
     (_t, f) => `files/${f.sha}.${f.ext}`,
     async (t, f, path) => {
-      referenced.add(path);
+      // Over the 50 MB upload limit: store it as parts, the app joins them again after download
+      const parts = partCount(f.bytes.byteLength);
+      const objects = parts > 0 ? Array.from({ length: parts }, (_, i) => `${path}.part${i}`) : [path];
+      objects.forEach((o) => referenced.add(o));
       progress.current = t.name;
       onProgress?.({ ...progress });
-      if (known.has(path) || (await remoteExists(path))) {
+      if (known.has(path) || (await remoteExists(objects[0]))) {
         progress.skipped++;
       } else {
-        await upload(path, f.bytes, MIME[f.ext] || 'application/octet-stream', 'public, max-age=31536000, immutable');
+        for (let i = 0; i < objects.length; i++) {
+          const body = parts > 0 ? f.bytes.subarray(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE) : f.bytes;
+          await upload(objects[i], body, parts > 0 ? 'application/octet-stream' : MIME[f.ext] || 'application/octet-stream', 'public, max-age=31536000, immutable');
+        }
         progress.uploaded++;
       }
       progress.done++;

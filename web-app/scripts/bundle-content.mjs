@@ -38,6 +38,24 @@ const base = custom
     : '';
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+// Same as CHUNK_SIZE in src/services/cloudConfig.ts: bigger files are stored online in parts
+const CHUNK_SIZE = 45 * 1024 * 1024;
+
+async function fetchFile(rel, size) {
+  const parts = size && size > CHUNK_SIZE ? Math.ceil(size / CHUNK_SIZE) : 0;
+  if (parts === 0) {
+    const r = await fetch(new URL(rel, base));
+    if (!r.ok) throw new Error(`${rel}: HTTP ${r.status}`);
+    return Buffer.from(await r.arrayBuffer());
+  }
+  const chunks = [];
+  for (let i = 0; i < parts; i++) {
+    const r = await fetch(new URL(`${rel}.part${i}`, base));
+    if (!r.ok) throw new Error(`${rel}.part${i}: HTTP ${r.status}`);
+    chunks.push(Buffer.from(await r.arrayBuffer()));
+  }
+  return Buffer.concat(chunks); // the APK keeps the whole file
+}
 
 async function main() {
   if (!base) {
@@ -57,25 +75,23 @@ async function main() {
   // Every file referenced by the manifest (models, extra animations, voices)
   const files = new Map();
   for (const t of manifest.targets) {
-    if (t.model) files.set(t.model, t.modelSha);
-    for (const a of t.assets || []) files.set(a.file, a.sha);
-    for (const v of Object.values(t.voices || {})) if (v?.file) files.set(v.file, v.sha);
-    if (t.audio) files.set(t.audio, t.audioSha);
+    if (t.model) files.set(t.model, { sha: t.modelSha, size: t.modelSize });
+    for (const a of t.assets || []) files.set(a.file, { sha: a.sha, size: a.size });
+    for (const v of Object.values(t.voices || {})) if (v?.file) files.set(v.file, { sha: v.sha, size: v.size });
+    if (t.audio && !files.has(t.audio)) files.set(t.audio, { sha: t.audioSha, size: t.audioSize });
   }
 
   let downloaded = 0;
   let kept = 0;
   let bytes = 0;
-  for (const [rel, sha] of files) {
+  for (const [rel, { sha, size }] of files) {
     const dest = path.join(outDir, rel);
     if (fs.existsSync(dest) && sha && sha256(fs.readFileSync(dest)) === sha) {
       kept++;
       bytes += fs.statSync(dest).size;
       continue;
     }
-    const r = await fetch(new URL(rel, base));
-    if (!r.ok) throw new Error(`${rel}: HTTP ${r.status}`);
-    const buf = Buffer.from(await r.arrayBuffer());
+    const buf = await fetchFile(rel, size);
     if (sha && sha256(buf) !== sha) throw new Error(`${rel}: isi file tidak cocok dengan manifest`);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, buf);

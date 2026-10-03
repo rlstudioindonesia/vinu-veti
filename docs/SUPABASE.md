@@ -59,15 +59,22 @@ Konfigurasi ini cukup sekali. Setelah aplikasi ada di Play Store, update konten 
 - File lama yang tidak dipakai lagi otomatis dihapus dari server saat publikasi.
 - HP yang offline tetap memakai salinan terakhir; tidak ada yang terhapus saat tidak ada sinyal.
 
-## Model ringan
+## Model ringan & file di atas 50 MB
 
-Batas unggah Supabase gratis 50 MB per file, dan model besar lambat diunduh anak. Kompres dulu di laptop:
+Batas upload Supabase gratis adalah 50 MB per file. Aplikasi menanganinya otomatis:
+
+1. **Kompres otomatis saat upload** (form admin, aktif secara default untuk file > 5 MB): tekstur diperkecil
+   ke maks. 2048 px dan diubah ke WebP, geometri/animasi dirapikan lalu dikompres Meshopt. Biasanya
+   5–15× lebih kecil dengan tampilan nyaris sama. Ukuran sebelum → sesudah ditampilkan.
+2. **File yang masih > 45 MB dipecah** menjadi beberapa bagian saat publikasi, lalu disatukan kembali
+   di HP dan saat build APK. Jadi batas 50 MB tidak menghalangi.
+
+Tetap usahakan model sekecil mungkin (idealnya < 15 MB): file besar lama diunduh anak, memperbesar APK,
+dan memakan memori HP. Untuk hasil maksimal bisa juga dikompres di laptop:
 
 ```
 npx @gltf-transform/cli optimize model.glb model-kecil.glb --compress meshopt --texture-compress webp --texture-size 1024
 ```
-
-Biasanya ukuran turun 5–10×. Aplikasi sudah mendukung model terkompresi Meshopt maupun Draco.
 
 ## Kuota gratis Supabase (perkiraan)
 
