@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- AR Target Scanner Reticle Corners (4 corners inside 66dp safe zone) -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M27,33 L27,27 L33,27 M75,27 L81,27 L81,33 M27,75 L27,81 L33,81 M75,81 L81,81 L81,75" />
+
+    <!-- Outer 'V' Wing Left Half (Cyan) -->
+    <path
+        android:fillColor="#06B6D4"
+        android:pathData="M31,44 L54,78 L54,69 L37,44 Z" />
+
+    <!-- Outer 'V' Wing Right Half (Emerald) -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M77,44 L54,78 L54,69 L71,44 Z" />
+
+    <!-- Inner 'V' Wing Left Half (Electric Violet) -->
+    <path
+        android:fillColor="#A855F7"
+        android:pathData="M38,36 L54,60 L54,51 L44,36 Z" />
+
+    <!-- Inner 'V' Wing Right Half (Neon Fuchsia) -->
+    <path
+        android:fillColor="#EC4899"
+        android:pathData="M70,36 L54,60 L54,51 L64,36 Z" />
+
+    <!-- Open Book Base Curve beneath the V wings -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M32,73 C42,70 49,70 54,73 C59,70 66,70 76,73" />
+
+    <!-- 3D Holographic Diamond Core -->
+    <!-- Top Facet (Ice Light Blue) -->
+    <path
+        android:fillColor="#F0F9FF"
+        android:pathData="M54,23 L62,31 L54,36 L46,31 Z" />
+    <!-- Left Facet (Cyan Blue) -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M46,31 L54,36 L54,46 L46,31 Z" />
+    <!-- Right Facet (Deep Ocean Blue) -->
+    <path
+        android:fillColor="#0284C7"
+        android:pathData="M62,31 L54,36 L54,46 L62,31 Z" />
+
+    <!-- Crisp Diamond Edge Outlines -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1.0"
+        android:strokeLineJoin="round"
+        android:pathData="M54,23 L62,31 L54,46 L46,31 Z M54,23 L54,46 M46,31 L54,36 L62,31" />
+
+    <!-- Top Radiant Star Sparkle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,19 L55.2,21.5 L58,22.5 L55.2,23.5 L54,26 L52.8,23.5 L50,22.5 L52.8,21.5 Z" />
+
+    <!-- Futuristic Laser Scan Horizon Beam -->
+    <path
+        android:strokeColor="#67E8F9"
+        android:strokeWidth="1.2"
+        android:strokeAlpha="0.85"
+        android:strokeLineCap="round"
+        android:pathData="M34,44 L74,44" />
+</vector>

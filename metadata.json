@@ -1,0 +1,6 @@
+{
+  "name": "Vinu Veti",
+  "description": "Vinu Veti - Aplikasi Augmented Reality cerdas penjelajah buku interaktif dengan proyeksi objek 3D di atas kamera nyata, offline-first, dan audio narasi.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
