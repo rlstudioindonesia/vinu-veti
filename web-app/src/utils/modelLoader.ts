@@ -1,13 +1,29 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 
 export interface LoadedGLBResult {
   scene: THREE.Group;
   animations: THREE.AnimationClip[];
 }
 
+// Compressed models (Draco / Meshopt, e.g. from `gltf-transform optimize`) are much smaller to
+// download and store. The Draco decoder is bundled in public/draco so it also works offline.
+let sharedLoader: GLTFLoader | null = null;
+function getLoader(): GLTFLoader {
+  if (!sharedLoader) {
+    const draco = new DRACOLoader();
+    draco.setDecoderPath(new URL('./draco/', window.location.href).href);
+    sharedLoader = new GLTFLoader();
+    sharedLoader.setDRACOLoader(draco);
+    sharedLoader.setMeshoptDecoder(MeshoptDecoder);
+  }
+  return sharedLoader;
+}
+
 export async function loadGlbModel(source: string | ArrayBuffer | Blob): Promise<LoadedGLBResult> {
-  const loader = new GLTFLoader();
+  const loader = getLoader();
   if (typeof source === 'string') {
     const gltf = await loader.loadAsync(source);
     return { scene: gltf.scene, animations: gltf.animations || [] };

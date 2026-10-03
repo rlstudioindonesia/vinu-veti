@@ -54,15 +54,34 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    (async () => {
-      await loadTargetsFromDB();
-      // Install bundled content and, when online, mirror newer online content for offline use
+    // Install bundled content and mirror newer online content (only changed files) for offline use.
+    // Runs at start, when the connection comes back and when the app returns to the foreground.
+    let running = false;
+    let lastRun = 0;
+    const sync = async () => {
+      if (running || Date.now() - lastRun < 60000) return;
+      running = true;
+      lastRun = Date.now();
       try {
-        if (await syncContentPack()) await loadTargetsFromDB();
+        await syncContentPack(() => loadTargetsFromDB());
+        await loadTargetsFromDB();
       } catch (e) {
         console.warn('Content sync notice:', e);
+      } finally {
+        running = false;
       }
-    })();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sync();
+    };
+
+    loadTargetsFromDB().then(sync);
+    window.addEventListener('online', sync);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('online', sync);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [loadTargetsFromDB]);
 
   const resetAR = useCallback(() => {

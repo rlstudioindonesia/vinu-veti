@@ -4,6 +4,7 @@ import { ARDatabase, resolveAudioSource } from '../../services/db';
 import { exportContentPack, importContentPack, saveFileToDevice } from '../../services/contentPack';
 import { soundService } from '../../services/soundService';
 import { GlbViewerPreview } from './GlbViewerPreview';
+import { CloudPublishCard } from './CloudPublishCard';
 import { VinuVetiLogo } from '../Common/VinuVetiLogo';
 import {
   Plus,
@@ -130,6 +131,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     return String.fromCharCode(...head) === 'glTF';
   };
 
+  // Big models are slow to download on kids' phones and fill up their storage
+  const sizeWarning = (f: PendingFile) => {
+    const mb = f.data.byteLength / 1048576;
+    return mb > 15
+      ? `Model ${mb.toFixed(1)} MB cukup berat. Disarankan kompres dulu (lihat docs/SUPABASE.md, bagian "Model ringan") agar cepat diunduh.`
+      : null;
+  };
+
   const handleGlbUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = await readFile(e);
     if (!f || !editingTarget) return;
@@ -139,7 +148,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
     setPendingMain(f);
     setEditingTarget({ ...editingTarget, customGlbFileName: f.name, customGlbUrl: undefined });
-    setFormError(null);
+    setFormError(sizeWarning(f));
   };
 
   const handleAddExtraGlb = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -153,7 +162,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const asset: ARQRTargetAsset = { id: subId, name: f.name.replace(/\.[^/.]+$/, ''), fileName: f.name };
     setPendingExtras({ ...pendingExtras, [subId]: f });
     setEditingTarget({ ...editingTarget, assets: [...(editingTarget.assets || []), asset] });
-    setFormError(null);
+    setFormError(sizeWarning(f));
   };
 
   const handleRemoveExtraAsset = (assetId: string) => {
@@ -423,14 +432,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
 
-        {/* Content pack: distribute stickers to every phone (bundle in the APK or host online) */}
-        <div className="mt-6 p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+        <CloudPublishCard targets={targets} />
+
+        {/* Offline content pack: backup / content bundled inside the APK */}
+        <div className="mt-4 p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
           <div>
-            <h4 className="text-xs font-bold text-white">Paket Konten (untuk semua pengguna aplikasi)</h4>
+            <h4 className="text-xs font-bold text-white">Cadangan & Konten Bawaan APK</h4>
             <p className="text-[11px] text-slate-400 leading-relaxed mt-1">
-              Stiker yang dibuat di sini hanya tersimpan di perangkat ini. Agar muncul di HP anak, ekspor paket konten
-              (.zip), lalu masukkan ke aplikasi sebelum rilis Play Store atau unggah ke hosting online — aplikasi akan
-              mengunduhnya sekali dan menyimpannya untuk mode offline.
+              Ekspor .zip untuk cadangan, memindahkan stiker ke perangkat admin lain, atau dimasukkan ke
+              web-app/public/content agar sudah ada sejak aplikasi pertama diinstal.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">

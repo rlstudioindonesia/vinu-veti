@@ -13,20 +13,20 @@ Aplikasi Android (WebView + React) yang menampilkan model 3D di atas stiker QR p
 Hasil build masuk ke `app/src/main/assets/www`, lalu build APK/AAB di Android Studio.
 Pastikan build terakhir sebelum membuat AAB untuk Play Store adalah `npm run build`.
 
-## Membuat & merilis konten
+## Konten online (disarankan)
 
-1. Jalankan `npm run dev` (atau pasang APK `build:admin`), buka menu Guru & Ortu (admin / admin).
-2. Tambah stiker, unggah model `.glb` (dan audio), cetak QR-nya.
-3. **Ekspor Paket Konten** → ZIP. Ekstrak isinya ke `web-app/public/content/`.
-4. `npm run build` → naikkan `versionCode` & `versionName` di `app/build.gradle.kts` → build AAB → unggah ke Play Store.
+Admin mempublikasikan stiker & model ke Supabase; aplikasi Play Store mengunduh hanya file yang berubah
+dan menyimpannya untuk offline. Update konten **tanpa rilis ulang** Play Store.
+Setup sekali: lihat [`docs/SUPABASE.md`](docs/SUPABASE.md).
 
 ## Update aplikasi
 
-Perubahan di komputer lokal **tidak** otomatis sampai ke pengguna. Setiap update (kode maupun konten bawaan)
-harus dirilis ulang ke Play Store dengan `versionCode` yang lebih besar; HP pengguna lalu memperbarui lewat Play Store.
+- **Konten** (stiker, model .glb, audio): cukup **Publikasikan** dari menu admin.
+- **Kode / tampilan**: build ulang, naikkan `versionCode` & `versionName` di `app/build.gradle.kts`,
+  unggah AAB baru ke Play Store.
 
-Opsional: dengan `VITE_CONTENT_URL` (lihat `.env.example`), konten baru (stiker/model/audio) bisa diunggah ke hosting
-statis dan diunduh aplikasi tanpa rilis ulang. Perubahan kode/tampilan tetap harus lewat Play Store.
+Opsional: konten bawaan APK (sudah ada sejak instal, tanpa internet sama sekali): ekspor ZIP dari admin,
+ekstrak ke `web-app/public/content/`, lalu `npm run build`.
 
 ## Ikon & maskot
 

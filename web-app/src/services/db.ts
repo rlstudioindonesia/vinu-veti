@@ -91,10 +91,22 @@ function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
-async function putAsset(key: string, data: FileData, name: string, type: 'glb' | 'audio') {
+async function putAsset(key: string, data: FileData, name: string, type: 'glb' | 'audio', sha?: string) {
   const db = await getDB();
   const tx = db.transaction([STORE_ASSETS], 'readwrite');
-  await requestToPromise(tx.objectStore(STORE_ASSETS).put({ id: key, data, name, type, createdAt: Date.now() }));
+  await requestToPromise(tx.objectStore(STORE_ASSETS).put({ id: key, data, name, type, sha, createdAt: Date.now() }));
+}
+
+/** SHA-256 recorded when a file was mirrored from the online content (used to skip unchanged files). */
+async function getAssetSha(key: string): Promise<string | null> {
+  try {
+    const db = await getDB();
+    const tx = db.transaction([STORE_ASSETS], 'readonly');
+    const row = await requestToPromise(tx.objectStore(STORE_ASSETS).get(key));
+    return row?.sha || null;
+  } catch {
+    return null;
+  }
 }
 
 async function getAsset(key: string): Promise<FileData | null> {
@@ -176,8 +188,25 @@ export const ARDatabase = {
     });
   },
 
-  async saveAssetBlob(id: string, fileData: FileData, fileName: string): Promise<void> {
-    await putAsset(id, fileData, fileName, 'glb');
+  /** Deletes exact stored file keys (`<id>` for models, `<id>_audio` for audio), including native copies. */
+  async deleteAssetKeys(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    try {
+      new Set(keys.map((k) => k.replace(/_audio$/, ''))).forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
+    } catch {
+      // ignore
+    }
+    const db = await getDB();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction([STORE_ASSETS], 'readwrite');
+      keys.forEach((k) => tx.objectStore(STORE_ASSETS).delete(k));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  },
+
+  async saveAssetBlob(id: string, fileData: FileData, fileName: string, sha?: string): Promise<void> {
+    await putAsset(id, fileData, fileName, 'glb', sha);
     await saveNativeCopy('model', id, fileData);
   },
 
@@ -185,8 +214,16 @@ export const ARDatabase = {
     return getAsset(id);
   },
 
-  async saveAudioBlob(id: string, fileData: FileData, fileName: string): Promise<void> {
-    await putAsset(`${id}_audio`, fileData, fileName, 'audio');
+  getAssetSha(id: string): Promise<string | null> {
+    return getAssetSha(id);
+  },
+
+  getAudioSha(id: string): Promise<string | null> {
+    return getAssetSha(`${id}_audio`);
+  },
+
+  async saveAudioBlob(id: string, fileData: FileData, fileName: string, sha?: string): Promise<void> {
+    await putAsset(`${id}_audio`, fileData, fileName, 'audio', sha);
     await saveNativeCopy('audio', id, fileData);
   },
 
