@@ -2,16 +2,25 @@
 
 Aplikasi Android (WebView + React) yang menampilkan model 3D di atas stiker QR pada buku. Bekerja offline.
 
-## Dua jenis build
+## Mode pengembang (admin) di versi Play Store
+
+Menu admin ada di semua versi, tetapi tersembunyi:
+
+1. Di homepage, **ketuk badge "VINU & VETI" (kiri atas) 7 kali dengan cepat**.
+2. Login dengan akun admin Supabase (email + password). Pendaftaran umum dimatikan, jadi hanya akun
+   yang dibuat di dashboard Supabase yang bisa masuk.
+3. Tambah/ubah stiker, unggah `.glb`, lalu **Publikasikan**. Login tersimpan di HP itu; keluar lewat
+   tombol **Keluar** di kartu Publikasi Online.
+
+## Build
 
 | Perintah (di folder `web-app`) | Isi | Untuk |
 |---|---|---|
-| `npm run build` | Tanpa menu Admin | **Play Store** |
-| `npm run build:admin` | Dengan menu Guru & Ortu (Admin) | HP tim pembuat konten |
-| `npm run dev` | Dengan Admin, di browser laptop | Membuat konten paling nyaman |
+| `npm run build` | Admin tersembunyi (ketuk 7×) | **Play Store** |
+| `npm run build:admin` | Ditambah tombol "Guru & Ortu" yang terlihat | HP tim (opsional) |
+| `npm run dev` | Dengan tombol admin, di browser laptop | Membuat konten di laptop |
 
 Hasil build masuk ke `app/src/main/assets/www`, lalu build APK/AAB di Android Studio.
-Pastikan build terakhir sebelum membuat AAB untuk Play Store adalah `npm run build`.
 
 ## Konten online (disarankan)
 

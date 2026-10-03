@@ -40,15 +40,15 @@ VITE_SUPABASE_URL=https://xxxxxxxx.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
 ```
 
-- Versi Play Store: `npm run build` (membaca konten online, tanpa menu admin).
+- Versi Play Store: `npm run build` (membaca konten online; admin tersembunyi, ketuk badge 7×).
 - Versi admin: `npm run build:admin` (atau `npm run dev` di laptop).
 
 Konfigurasi ini cukup sekali. Setelah aplikasi ada di Play Store, update konten **tidak perlu rilis ulang**.
 
 ## 5. Update konten sehari-hari
 
-1. Buka aplikasi admin → **Guru & Ortu** → tambah/edit/hapus stiker, unggah `.glb`.
-2. Di kartu **Publikasi Online**, login dengan akun admin → **Publikasikan**.
+1. Di aplikasi (versi Play Store pun bisa): ketuk badge **VINU & VETI** 7× → login akun admin → tambah/edit/hapus stiker, unggah `.glb`.
+2. Di kartu **Publikasi Online** → **Publikasikan**.
 3. HP anak mengambil perubahan saat aplikasi dibuka/kembali online.
 
 ## Cara kerja indexing (kenapa ringan)

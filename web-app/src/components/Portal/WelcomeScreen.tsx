@@ -1,18 +1,31 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Lock, Volume2, VolumeX, ChevronRight, Sparkles } from 'lucide-react';
 import { soundService } from '../../services/soundService';
 import { MASCOT_SRC, Cloud, Star, Spark, Hills, Leaf, SKY_GRADIENT } from '../Common/Scenery';
 
 interface WelcomeScreenProps {
   onStartCamera: () => void;
-  onOpenAdmin?: () => void; // hidden when undefined (Play Store build)
+  onOpenAdmin: () => void;
+  showAdminButton: boolean; // false in the Play Store build: open admin by tapping the badge 7 times
   onOpenPrivacy: () => void;
   hasContent: boolean;
 }
 
-export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onOpenAdmin, onOpenPrivacy, hasContent }) => {
+export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onOpenAdmin, showAdminButton, onOpenPrivacy, hasContent }) => {
   const [soundEnabled, setSoundEnabled] = useState<boolean>(!soundService.getMuted());
   const [mascotOk, setMascotOk] = useState<boolean>(true);
+
+  // Hidden admin entry (like Android's developer mode): 7 quick taps on the badge
+  const tapsRef = useRef<number[]>([]);
+  const handleBadgeTap = () => {
+    const now = Date.now();
+    tapsRef.current = [...tapsRef.current.filter((t) => now - t < 3000), now];
+    if (tapsRef.current.length >= 7) {
+      tapsRef.current = [];
+      navigator.vibrate?.(60);
+      onOpenAdmin();
+    }
+  };
 
   const toggleSound = () => {
     soundService.setMuted(soundEnabled);
@@ -38,7 +51,10 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
       <div className="relative mx-auto flex min-h-full max-w-md flex-col px-4 pb-6 pt-4">
         {/* Top bar */}
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 rounded-full bg-gradient-to-b from-[#1BA7A0] to-[#13827D] px-4 py-2 shadow-[0_4px_0_#0E6B66]">
+          <div
+            onClick={handleBadgeTap}
+            className="flex items-center gap-1.5 rounded-full bg-gradient-to-b from-[#1BA7A0] to-[#13827D] px-4 py-2 shadow-[0_4px_0_#0E6B66]"
+          >
             <span className="text-lg leading-none">📖</span>
             <span className="text-base font-bold tracking-wide text-white">
               VINU <span className="text-[#FFD43B]">&amp;</span> VETI
@@ -52,7 +68,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
             >
               {soundEnabled ? <Volume2 className="h-5 w-5 text-[#FFD43B]" /> : <VolumeX className="h-5 w-5 text-white/70" />}
             </button>
-            {onOpenAdmin && (
+            {showAdminButton && (
             <button
               onClick={onOpenAdmin}
               className="flex items-center gap-1.5 rounded-full bg-[#173A6B] px-3.5 py-2 text-sm font-semibold text-white shadow-[0_3px_0_#0C2346] active:translate-y-0.5"
@@ -126,9 +142,9 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
 
           {!hasContent && (
             <p className="rounded-2xl bg-white/80 px-3 py-2 text-center text-xs font-semibold text-[#173A6B]">
-              {onOpenAdmin
+              {showAdminButton
                 ? 'Belum ada konten AR. Tambahkan stiker & model 3D di menu Guru & Ortu.'
-                : 'Konten AR belum tersedia di versi ini.'}
+                : 'Konten AR belum tersedia. Sambungkan internet sekali agar konten terunduh.'}
             </p>
           )}
 
