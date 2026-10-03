@@ -6,14 +6,30 @@ import { getModelEntries, resolveModelSource } from '../../services/db';
 import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
-import { Sparkles, Hand, AlertTriangle } from 'lucide-react';
+import { Hand, AlertTriangle } from 'lucide-react';
 
 interface ThreeCanvasProps {
   target: ARQRTarget | null;
   qrAnchor: QRAnchor | null;
-  activeAssetIndex: number;
-  onCycleNextAsset: () => void;
 }
+
+/** One uploaded .glb of the sticker's character (main model or an extra animation file). */
+interface Variant {
+  pivot: THREE.Group;
+  mixer: THREE.AnimationMixer | null;
+  actions: THREE.AnimationAction[];
+}
+
+/** One step of the tap cycle: a variant and one of its animation clips (-1 = no animation). */
+interface Step {
+  variant: number;
+  clip: number;
+}
+
+// Taps this close to the character (screen px) also count, so small fingers do not miss it
+const TAP_PADDING_PX = 36;
+// Little "jump" when the character is touched
+const BOUNCE_MS = 280;
 
 // Model height in QR-sticker widths when modelScale = 1
 const BASE_MODEL_HEIGHT = 2.0;
@@ -49,16 +65,18 @@ function quadArea(p: Point2[]): number {
 // model's front (+Z) faces the QR's bottom edge, i.e. the reader holding the book.
 const STAND_ON_QR = new THREE.Matrix4().makeRotationX(Math.PI / 2);
 
-export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, activeAssetIndex, onCycleNextAsset }) => {
+export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  // Anchor on the QR (pose set every frame); holds every animation variant of the character
   const modelRef = useRef<THREE.Group | null>(null);
-  const mixerRef = useRef<THREE.AnimationMixer | null>(null);
-  const actionsRef = useRef<THREE.AnimationAction[]>([]);
-  const clipsRef = useRef<THREE.AnimationClip[]>([]);
-  const actionIndexRef = useRef<number>(0);
+  const variantsRef = useRef<Array<Variant | null>>([]);
+  const stepsRef = useRef<Step[]>([]);
+  const stepIndexRef = useRef<number>(0);
+  const activeVariantRef = useRef<number>(-1);
+  const bounceStartRef = useRef<number>(0);
 
   // Latest props for the render loop (avoids stale closures)
   const anchorRef = useRef<QRAnchor | null>(qrAnchor);
@@ -80,7 +98,6 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
 
   const [loadingModel, setLoadingModel] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [touchFeedback, setTouchFeedback] = useState<string | null>(null);
   const [showHint, setShowHint] = useState<boolean>(false);
 
   // Scene setup + render loop
@@ -102,6 +119,12 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
     renderer.domElement.addEventListener('webglcontextlost', (e) => e.preventDefault(), false);
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
+
+    const root = new THREE.Group();
+    root.matrixAutoUpdate = false;
+    root.visible = false;
+    scene.add(root);
+    modelRef.current = root;
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.6));
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.8);
@@ -129,7 +152,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
     const animate = () => {
       frameId = requestAnimationFrame(animate);
       const delta = Math.min(clock.getDelta(), 0.05);
-      mixerRef.current?.update(delta);
+      const active = variantsRef.current[activeVariantRef.current];
+      active?.mixer?.update(delta);
 
       const model = modelRef.current;
       const anchor = anchorRef.current;
@@ -166,11 +190,14 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
           // QR briefly not detected (motion blur): with a gyroscope the model stays put on the sticker;
           // without one, hide it soon so it does not float in the wrong place
           const lostFor = stab.msSinceMeasurement(now);
-          const smoothed = lostFor < (gyro.active ? 2500 : 700) ? stab.pose() : null;
+          const smoothed = lostFor < (gyro.active ? 2500 : 700) ? stab.pose(delta) : null;
           const pose = smoothed ? uprightPose(smoothed, gravity.get()) : null;
           if (!pose) model.visible = false;
           if (pose) {
-            const size = BASE_MODEL_HEIGHT * (t.modelScale || 1) * userScaleRef.current;
+            // Touch feedback: a quick squash-and-stretch jump
+            const b = (now - bounceStartRef.current) / BOUNCE_MS;
+            const bounce = b >= 0 && b < 1 ? 1 + 0.12 * Math.sin(b * Math.PI) : 1;
+            const size = BASE_MODEL_HEIGHT * (t.modelScale || 1) * userScaleRef.current * bounce;
             model.matrixAutoUpdate = false;
             model.matrix
               .copy(pose)
@@ -178,7 +205,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
               .multiply(new THREE.Matrix4().makeTranslation(0, t.elevationOffset || 0, 0))
               .multiply(new THREE.Matrix4().makeRotationY(yawRef.current))
               .multiply(new THREE.Matrix4().makeScale(size, size, size));
-            model.visible = true;
+            model.visible = model.children.length > 0;
           }
         }
       }
@@ -198,90 +225,111 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
     };
   }, []);
 
-  // Load the model whenever the target or the selected asset changes
-  useEffect(() => {
-    const scene = sceneRef.current;
-    if (!scene) return;
-
-    if (modelRef.current) {
-      scene.remove(modelRef.current);
-      modelRef.current = null;
+  /** Show one step of the cycle: its variant becomes visible and its clip plays from the start. */
+  const activateStep = useCallback((index: number) => {
+    const step = stepsRef.current[index];
+    if (!step) return;
+    stepIndexRef.current = index;
+    variantsRef.current.forEach((v, i) => {
+      if (!v) return;
+      v.pivot.visible = i === step.variant;
+      if (i !== step.variant) v.mixer?.stopAllAction();
+    });
+    const v = variantsRef.current[step.variant];
+    activeVariantRef.current = step.variant;
+    if (v && step.clip >= 0) {
+      v.actions.forEach((a, i) => i !== step.clip && a.stop());
+      v.actions[step.clip].reset().setLoop(THREE.LoopRepeat, Infinity).play();
     }
-    mixerRef.current?.stopAllAction();
-    mixerRef.current = null;
-    actionsRef.current = [];
-    clipsRef.current = [];
-    actionIndexRef.current = 0;
+  }, []);
+
+  // Load every .glb of the sticker once (main first, extra animations in the background), so
+  // switching animations on touch is instant
+  useEffect(() => {
+    const root = modelRef.current;
+    if (!root) return;
+
+    variantsRef.current.forEach((v) => v?.mixer?.stopAllAction());
+    root.clear();
+    variantsRef.current = [];
+    stepsRef.current = [];
+    stepIndexRef.current = 0;
+    activeVariantRef.current = -1;
     setLoadError(null);
+    setShowHint(false);
     if (!target) return;
 
     let cancelled = false;
     setLoadingModel(true);
     yawRef.current = 0;
     userScaleRef.current = 1;
+    const entries = getModelEntries(target);
+    variantsRef.current = entries.map(() => null);
+
+    const rebuildSteps = () => {
+      const steps: Step[] = [];
+      variantsRef.current.forEach((v, i) => {
+        if (!v) return;
+        if (v.actions.length === 0) steps.push({ variant: i, clip: -1 });
+        else v.actions.forEach((_, c) => steps.push({ variant: i, clip: c }));
+      });
+      stepsRef.current = steps;
+    };
 
     (async () => {
-      try {
-        const source = await resolveModelSource(target, activeAssetIndex);
-        if (!source) throw new Error('File model 3D belum diunggah untuk stiker ini');
-        const { scene: gltfScene, animations } = await loadGlbModel(source);
-        if (cancelled || !sceneRef.current) return;
-
-        const model = normalizeModel(gltfScene);
-        model.visible = false;
-        if (animations.length > 0) {
-          const mixer = new THREE.AnimationMixer(gltfScene);
-          mixerRef.current = mixer;
-          actionsRef.current = animations.map((clip) => mixer.clipAction(clip));
-          clipsRef.current = animations;
-          actionsRef.current[0].play();
+      let mainScale: number | undefined;
+      for (let i = 0; i < entries.length; i++) {
+        try {
+          const source = await resolveModelSource(target, i);
+          if (!source) {
+            if (i === 0) throw new Error('File model 3D belum diunggah untuk stiker ini');
+            continue;
+          }
+          const { scene: gltfScene, animations } = await loadGlbModel(source);
+          if (cancelled) return;
+          // Same scale as the main model: the character keeps its size in every animation
+          const { pivot, scale } = normalizeModel(gltfScene, mainScale);
+          if (i === 0) mainScale = scale;
+          pivot.visible = false;
+          const mixer = animations.length > 0 ? new THREE.AnimationMixer(gltfScene) : null;
+          const actions = mixer ? animations.map((clip) => mixer.clipAction(clip)) : [];
+          variantsRef.current[i] = { pivot, mixer, actions };
+          root.add(pivot);
+          rebuildSteps();
+          if (activeVariantRef.current < 0) {
+            activateStep(0);
+            setLoadingModel(false);
+          }
+          if (stepsRef.current.length > 1) {
+            setShowHint(true);
+            window.setTimeout(() => setShowHint(false), 3500);
+          }
+        } catch (err) {
+          console.warn('Model load failed:', entries[i]?.id, err);
+          if (i === 0 && !cancelled) {
+            setLoadError(err instanceof Error && err.message.includes('belum') ? err.message : 'Model 3D gagal dimuat');
+            setLoadingModel(false);
+          }
         }
-        if (animations.length > 1 || getModelEntries(target).length > 1) {
-          setShowHint(true);
-          window.setTimeout(() => setShowHint(false), 3000);
-        }
-        sceneRef.current.add(model);
-        modelRef.current = model;
-      } catch (err) {
-        console.warn('Model load failed:', err);
-        if (!cancelled) setLoadError(err instanceof Error && err.message.includes('belum') ? err.message : 'Model 3D gagal dimuat');
-      } finally {
-        if (!cancelled) setLoadingModel(false);
       }
+      if (!cancelled) setLoadingModel(false);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [target, activeAssetIndex]);
+  }, [target, activateStep]);
 
-  const flash = (msg: string, ms = 1800) => {
-    setTouchFeedback(msg);
-    window.setTimeout(() => setTouchFeedback(null), ms);
-  };
-
-  // Tap on the object: next animation clip, or next model attached to the same QR
+  // Touching the character: next animation (next clip / next uploaded .glb of the same QR)
+  // Only when the sticker has more than one animation; otherwise touching does nothing at all.
   const handleTapObject = useCallback(() => {
-    navigator.vibrate?.(40);
-    const actions = actionsRef.current;
-    if (actions.length > 1) {
-      const prev = actionIndexRef.current;
-      const next = (prev + 1) % actions.length;
-      actionIndexRef.current = next;
-      actions[prev].fadeOut(0.25);
-      actions[next].reset().fadeIn(0.25).play();
-      flash(`Animasi: ${clipsRef.current[next]?.name || `#${next + 1}`}`);
-      return;
-    }
-    if (target && getModelEntries(target).length > 1) {
-      onCycleNextAsset();
-      flash('Model berikutnya...');
-      return;
-    }
-    if (actions.length === 1) {
-      actions[0].reset().play();
-    }
-  }, [target, onCycleNextAsset]);
+    const steps = stepsRef.current;
+    if (steps.length < 2) return;
+    navigator.vibrate?.(35);
+    bounceStartRef.current = performance.now();
+    activateStep((stepIndexRef.current + 1) % steps.length);
+    setShowHint(false);
+  }, [activateStep]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     pointerRef.current = { down: true, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY };
@@ -299,22 +347,31 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
     const p = pointerRef.current;
     p.down = false;
     const moved = Math.hypot(e.clientX - p.startX, e.clientY - p.startY);
-    const model = modelRef.current;
+    const root = modelRef.current;
     const camera = cameraRef.current;
     const container = containerRef.current;
-    if (moved > 12 || !model || !model.visible || !camera || !container) return;
+    const active = variantsRef.current[activeVariantRef.current];
+    if (moved > 12 || !root || !root.visible || !active || !camera || !container) return;
 
+    // Hit when the finger is on the character's on-screen outline box (+ padding for small fingers)
     const rect = container.getBoundingClientRect();
-    const mouse = new THREE.Vector2(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1
-    );
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(mouse, camera);
-    // Skinned meshes raycast poorly, so also accept taps inside the model's bounding box
-    const hit = raycaster.intersectObject(model, true).length > 0 ||
-      raycaster.ray.intersectsBox(new THREE.Box3().setFromObject(model));
-    if (hit) handleTapObject();
+    const box = new THREE.Box3().setFromObject(active.pivot);
+    if (box.isEmpty()) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const x of [box.min.x, box.max.x])
+      for (const y of [box.min.y, box.max.y])
+        for (const z of [box.min.z, box.max.z]) {
+          const v = new THREE.Vector3(x, y, z).project(camera);
+          const sx = ((v.x + 1) / 2) * rect.width;
+          const sy = ((1 - v.y) / 2) * rect.height;
+          minX = Math.min(minX, sx); maxX = Math.max(maxX, sx);
+          minY = Math.min(minY, sy); maxY = Math.max(maxY, sy);
+        }
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    if (px >= minX - TAP_PADDING_PX && px <= maxX + TAP_PADDING_PX && py >= minY - TAP_PADDING_PX && py <= maxY + TAP_PADDING_PX) {
+      handleTapObject();
+    }
   };
 
   const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
@@ -362,17 +419,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
         </div>
       )}
 
-      {touchFeedback && (
-        <div className="absolute top-18 left-1/2 -translate-x-1/2 bg-black/75 px-3.5 py-1.5 rounded-full border border-emerald-400/40 text-emerald-300 text-xs font-semibold shadow-lg flex items-center gap-1.5">
-          <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-          <span>{touchFeedback}</span>
-        </div>
-      )}
-
-      {showHint && !touchFeedback && qrAnchor && (
+      {showHint && qrAnchor && (
         <div className="absolute top-18 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1.5 rounded-full border border-white/10 text-white/90 text-[11px] shadow-lg flex items-center gap-1.5">
           <Hand className="w-3.5 h-3.5 text-emerald-400 animate-bounce" />
-          <span>Sentuh objek 3D untuk animasi berikutnya</span>
+          <span>Sentuh karakternya untuk ganti gerakan!</span>
         </div>
       )}
     </div>

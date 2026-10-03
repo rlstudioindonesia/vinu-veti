@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ARQRTarget } from './types/arBook';
-import { ARDatabase, getModelEntries, resolveAudioSource } from './services/db';
+import { ARDatabase, resolveAudioSource } from './services/db';
 import { syncContentPack } from './services/contentPack';
 import { getCloudUser } from './services/cloudPublish';
 import { QRAnchor } from './services/barcodeScanner';
@@ -35,7 +35,6 @@ export default function App() {
   const [targets, setTargets] = useState<ARQRTarget[]>([]);
   const [activeTarget, setActiveTarget] = useState<ARQRTarget | null>(null);
   const [qrAnchor, setQrAnchor] = useState<QRAnchor | null>(null);
-  const [activeAssetIndex, setActiveAssetIndex] = useState<number>(0);
 
   const targetsRef = useRef<ARQRTarget[]>([]);
   targetsRef.current = targets;
@@ -92,7 +91,6 @@ export default function App() {
     if (qrLossTimerRef.current) window.clearTimeout(qrLossTimerRef.current);
     setActiveTarget(null);
     setQrAnchor(null);
-    setActiveAssetIndex(0);
     soundService.stopAudio();
   }, []);
 
@@ -103,8 +101,7 @@ export default function App() {
 
     if (activeTargetRef.current?.id !== matched.id) {
       soundService.playScanBeep();
-      setActiveAssetIndex(0);
-      setActiveTarget(matched);
+        setActiveTarget(matched);
       if (matched.autoPlayAudio !== false) {
         resolveAudioSource(matched).then((src) => {
           if (src && activeTargetRef.current?.id === matched.id) soundService.playManualAudio(src);
@@ -117,12 +114,6 @@ export default function App() {
     qrLossTimerRef.current = window.setTimeout(() => setQrAnchor(null), QR_LOST_TIMEOUT);
   }, []);
 
-  const handleCycleNextAsset = useCallback(() => {
-    const t = activeTargetRef.current;
-    if (!t) return;
-    const count = getModelEntries(t).length;
-    if (count > 1) setActiveAssetIndex((prev) => (prev + 1) % count);
-  }, []);
 
   const openCamera = () => {
     resetAR();
@@ -154,12 +145,7 @@ export default function App() {
       {!isLoadingApp && currentView === 'ar' && (
         <>
           <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
-          <ThreeCanvas
-            target={activeTarget}
-            qrAnchor={qrAnchor}
-            onCycleNextAsset={handleCycleNextAsset}
-            activeAssetIndex={activeAssetIndex}
-          />
+          <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} />
           <ARScannerOverlay
             activeTarget={qrAnchor ? activeTarget : null}
             onBackToHome={() => {
