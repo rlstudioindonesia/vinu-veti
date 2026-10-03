@@ -17,6 +17,10 @@ import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 // The model stays visible this long after the QR was last seen (scanner misses some frames)
 const QR_LOST_TIMEOUT = 1200;
 
+// Admin tools (create stickers, print QR, export content packs) are left out of the Play Store build.
+// They are available in `npm run dev` and in `npm run build:admin` (VITE_ENABLE_ADMIN=true in .env.admin).
+const ADMIN_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_ADMIN === 'true';
+
 function normalizeCode(code: string) {
   return (code || '').trim().toLowerCase();
 }
@@ -117,7 +121,7 @@ export default function App() {
       {!isLoadingApp && currentView === 'portal' && (
         <WelcomeScreen
           onStartCamera={openCamera}
-          onOpenAdmin={handleOpenAdmin}
+          onOpenAdmin={ADMIN_ENABLED ? handleOpenAdmin : undefined}
           onOpenPrivacy={() => setIsPrivacyModalOpen(true)}
           hasContent={targets.length > 0}
         />
@@ -142,7 +146,7 @@ export default function App() {
         </>
       )}
 
-      {!isLoadingApp && currentView === 'admin' && (
+      {ADMIN_ENABLED && !isLoadingApp && currentView === 'admin' && (
         <AdminPanel
           targets={targets}
           onRefreshTargets={loadTargetsFromDB}
@@ -152,16 +156,18 @@ export default function App() {
         />
       )}
 
-      {isPrintModalOpen && <QRStickerPrintModal targets={targets} onClose={() => setIsPrintModalOpen(false)} />}
+      {ADMIN_ENABLED && isPrintModalOpen && <QRStickerPrintModal targets={targets} onClose={() => setIsPrintModalOpen(false)} />}
 
-      <AdminLoginModal
-        isOpen={isAdminLoginOpen}
-        onSuccess={() => {
-          setIsAdminLoginOpen(false);
-          setCurrentView('admin');
-        }}
-        onClose={() => setIsAdminLoginOpen(false)}
-      />
+      {ADMIN_ENABLED && (
+        <AdminLoginModal
+          isOpen={isAdminLoginOpen}
+          onSuccess={() => {
+            setIsAdminLoginOpen(false);
+            setCurrentView('admin');
+          }}
+          onClose={() => setIsAdminLoginOpen(false)}
+        />
+      )}
 
       <PrivacyPolicyModal isOpen={isPrivacyModalOpen} onClose={() => setIsPrivacyModalOpen(false)} />
     </div>

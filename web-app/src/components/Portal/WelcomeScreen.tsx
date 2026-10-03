@@ -4,7 +4,7 @@ import { soundService } from '../../services/soundService';
 
 interface WelcomeScreenProps {
   onStartCamera: () => void;
-  onOpenAdmin: () => void;
+  onOpenAdmin?: () => void; // hidden when undefined (Play Store build)
   onOpenPrivacy: () => void;
   hasContent: boolean;
 }
@@ -97,6 +97,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
             >
               {soundEnabled ? <Volume2 className="h-5 w-5 text-[#FFD43B]" /> : <VolumeX className="h-5 w-5 text-white/70" />}
             </button>
+            {onOpenAdmin && (
             <button
               onClick={onOpenAdmin}
               className="flex items-center gap-1.5 rounded-full bg-[#173A6B] px-3.5 py-2 text-sm font-semibold text-white shadow-[0_3px_0_#0C2346] active:translate-y-0.5"
@@ -104,6 +105,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
               <Lock className="h-4 w-4 text-[#FFD43B]" />
               Guru &amp; Ortu
             </button>
+            )}
           </div>
         </div>
 
@@ -169,7 +171,9 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
 
           {!hasContent && (
             <p className="rounded-2xl bg-white/80 px-3 py-2 text-center text-xs font-semibold text-[#173A6B]">
-              Belum ada konten AR. Tambahkan stiker &amp; model 3D di menu Guru &amp; Ortu.
+              {onOpenAdmin
+                ? 'Belum ada konten AR. Tambahkan stiker & model 3D di menu Guru & Ortu.'
+                : 'Konten AR belum tersedia di versi ini.'}
             </p>
           )}
 
