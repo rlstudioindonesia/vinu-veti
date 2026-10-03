@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { Point2 } from './qrPose';
 
 /**
  * One Euro filter (Casiez et al. 2012): heavy smoothing when the signal is still (kills jitter),
@@ -41,56 +40,139 @@ export class OneEuroFilter {
 
 // A sudden rotation bigger than this (radians) is treated as a misread until it persists
 const FLIP_ANGLE = 0.6; // ~34°
-const FLIP_CONFIRM_FRAMES = 6;
+const FLIP_CONFIRM_MEASUREMENTS = 4;
+// Distance changes smaller than this fraction are treated as noise (stops "growing/shrinking")
+const DISTANCE_DEADBAND = 0.03;
 
 /**
- * Stabilises the tracked QR: filters the 4 screen corners, then smooths the resulting pose
- * (position + rotation) and ignores one-off pose flips caused by noisy corners on small QR codes.
+ * Keeps the QR pose in camera space steady.
+ *
+ * - Every frame the phone's own rotation (gyroscope) is applied, so the model stays glued to the
+ *   sticker while the camera turns, even when the QR is briefly not detected (motion blur).
+ * - Each new QR measurement then only corrects the remaining error, so it can be smoothed heavily
+ *   without lag: direction quickly, distance (= size on screen) slowly with a dead band, rotation
+ *   slowly, ignoring one-off flips caused by noisy corners on small QR codes.
  */
 export class QrPoseStabilizer {
-  private corners = Array.from({ length: 8 }, () => new OneEuroFilter(1.0, 0.02));
   private pos: THREE.Vector3 | null = null;
   private rot = new THREE.Quaternion();
-  private flipFrames = 0;
+  private flipCount = 0;
+  private lastMeasurement = 0;
+  private recentDist: number[] = [];
 
   reset() {
-    this.corners.forEach((f) => f.reset());
     this.pos = null;
-    this.flipFrames = 0;
+    this.flipCount = 0;
+    this.recentDist = [];
   }
 
-  filterCorners(raw: Point2[], dt: number): Point2[] {
-    return raw.map((p, i) => ({
-      x: this.corners[i * 2].filter(p.x, dt),
-      y: this.corners[i * 2 + 1].filter(p.y, dt),
-    }));
+  /** Time since the last QR measurement (ms). */
+  msSinceMeasurement(now: number): number {
+    return this.pos ? now - this.lastMeasurement : Infinity;
   }
 
-  /** Returns the smoothed pose matrix for a freshly computed one. */
-  smoothPose(pose: THREE.Matrix4, dt: number): THREE.Matrix4 {
+  /** Apply the camera's rotation since the previous frame (from the gyroscope). */
+  applyCameraRotation(delta: THREE.Quaternion | null) {
+    if (!this.pos || !delta) return;
+    const inv = delta.clone().invert();
+    this.pos.applyQuaternion(inv);
+    this.rot.premultiply(inv);
+  }
+
+  /**
+   * Feed a new QR measurement. `areaNorm` is the area of the QR on screen in normalised camera units
+   * (pixels² / focal²): distance from the apparent size is far steadier than from the pose itself.
+   */
+  addMeasurement(pose: THREE.Matrix4, now: number, areaNorm: number) {
     const p = new THREE.Vector3();
     const q = new THREE.Quaternion();
-    const s = new THREE.Vector3();
-    pose.decompose(p, q, s);
+    pose.decompose(p, q, new THREE.Vector3());
+    const gap = now - this.lastMeasurement;
+    this.lastMeasurement = now;
+    // After a gap (QR was lost), trust the new measurement more to remove any drift
+    const reacquire = !this.pos || gap > 300;
+    if (reacquire) this.recentDist = [];
 
-    if (!this.pos) {
-      this.pos = p.clone();
-      this.rot.copy(q);
+    const angle = this.pos ? this.rot.angleTo(q) : 0;
+    if (!this.pos) this.rot.copy(q);
+    if (!reacquire && angle > FLIP_ANGLE && this.flipCount < FLIP_CONFIRM_MEASUREMENTS) {
+      this.flipCount++; // probably a misread: keep the previous rotation
     } else {
-      const angle = this.rot.angleTo(q);
-      if (angle > FLIP_ANGLE && this.flipFrames < FLIP_CONFIRM_FRAMES) {
-        // Probably a misread: keep the previous rotation, but still follow the position
-        this.flipFrames++;
-      } else {
-        this.flipFrames = 0;
-        // Rotation: slow and steady (time-based so it behaves the same at any frame rate)
-        const kRot = 1 - Math.exp(-dt * (4 + 20 * Math.min(angle, 0.5)));
-        this.rot.slerp(q, kRot);
-      }
-      const kPos = 1 - Math.exp(-dt * 18);
-      this.pos.lerp(p, kPos);
+      this.flipCount = 0;
+      this.rot.slerp(q, reacquire ? 0.6 : 0.15);
     }
-    return new THREE.Matrix4().compose(this.pos, this.rot, new THREE.Vector3(1, 1, 1));
+
+    // Distance from the apparent size: area ≈ cos(tilt) / distance² for a unit square
+    const dir = p.clone().normalize();
+    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(this.rot);
+    const cosTilt = Math.max(0.25, Math.abs(normal.dot(dir)));
+    const sizeDist = areaNorm > 0 ? Math.sqrt(cosTilt / areaNorm) : p.length();
+    this.recentDist.push(sizeDist);
+    if (this.recentDist.length > 7) this.recentDist.shift();
+    const median = [...this.recentDist].sort((a, b) => a - b)[Math.floor(this.recentDist.length / 2)];
+
+    if (!this.pos || reacquire) {
+      this.pos = dir.multiplyScalar(median);
+      return;
+    }
+    // Direction (where on screen): follow quickly. Distance (size on screen): slow, with a dead band.
+    const dist = this.pos.length();
+    const nextDir = this.pos.clone().normalize().lerp(dir, 0.5).normalize();
+    const ratio = median / dist;
+    let nextDist = dist;
+    if (Math.abs(ratio - 1) > 0.5) nextDist = median; // moved much closer/further: follow
+    else if (Math.abs(ratio - 1) > DISTANCE_DEADBAND) nextDist = dist + (median - dist) * 0.1;
+    this.pos.copy(nextDir.multiplyScalar(nextDist));
+  }
+
+  pose(): THREE.Matrix4 | null {
+    return this.pos ? new THREE.Matrix4().compose(this.pos, this.rot, new THREE.Vector3(1, 1, 1)) : null;
+  }
+}
+
+/**
+ * Phone rotation from the gyroscope, as camera-space rotation since the last read. For a back camera
+ * in portrait the device axes equal the camera axes; rotationRate is in deg/s (alpha = z, beta = x,
+ * gamma = y, right-handed).
+ */
+export class GyroTracker {
+  private pending = new THREE.Quaternion();
+  private lastEventTime = 0;
+  private lastEvent = 0;
+  private readonly onMotion = (e: DeviceMotionEvent) => {
+    const r = e.rotationRate;
+    const now = performance.now();
+    const dt = this.lastEventTime ? Math.min((now - this.lastEventTime) / 1000, 0.1) : 0;
+    this.lastEventTime = now;
+    if (!r || r.alpha === null || r.beta === null || r.gamma === null || dt <= 0) return;
+    const w = new THREE.Vector3(r.beta, r.gamma, r.alpha).multiplyScalar(Math.PI / 180);
+    const angle = THREE.MathUtils.degToRad(screen.orientation?.angle ?? 0);
+    w.applyAxisAngle(new THREE.Vector3(0, 0, 1), -angle);
+    const mag = w.length();
+    if (mag * dt > 1e-5) {
+      this.pending.multiply(new THREE.Quaternion().setFromAxisAngle(w.divideScalar(mag), mag * dt));
+    }
+    this.lastEvent = now;
+  };
+
+  start() {
+    window.addEventListener('devicemotion', this.onMotion);
+  }
+
+  stop() {
+    window.removeEventListener('devicemotion', this.onMotion);
+  }
+
+  get active(): boolean {
+    return performance.now() - this.lastEvent < 500;
+  }
+
+  /** Camera rotation accumulated since the previous call (null when no gyroscope). */
+  take(): THREE.Quaternion | null {
+    if (!this.active) return null;
+    const q = this.pending.clone();
+    this.pending.identity();
+    return q;
   }
 }
 

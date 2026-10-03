@@ -5,7 +5,7 @@ import { QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries, resolveModelSource } from '../../services/db';
 import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
-import { GravityTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
+import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
 import { Sparkles, Hand, AlertTriangle } from 'lucide-react';
 
 interface ThreeCanvasProps {
@@ -35,6 +35,16 @@ function boxCorners(a: QRAnchor): Point2[] {
   ];
 }
 
+/** Area of a quadrilateral (shoelace formula). */
+function quadArea(p: Point2[]): number {
+  let a = 0;
+  for (let i = 0; i < p.length; i++) {
+    const j = (i + 1) % p.length;
+    a += p[i].x * p[j].y - p[j].x * p[i].y;
+  }
+  return Math.abs(a) / 2;
+}
+
 // Model space → QR space: the model's up (+Y) becomes the QR normal (+Z, out of the paper) and the
 // model's front (+Z) faces the QR's bottom edge, i.e. the reader holding the book.
 const STAND_ON_QR = new THREE.Matrix4().makeRotationX(Math.PI / 2);
@@ -58,6 +68,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
 
   // Jitter filtering of the tracked QR + real-world "up" from the accelerometer
   const stabilizerRef = useRef(new QrPoseStabilizer());
+  const lastAnchorRef = useRef<QRAnchor | null>(null);
 
   // Touch interaction
   const yawRef = useRef<number>(0);
@@ -110,6 +121,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
 
     const gravity = new GravityTracker();
     gravity.start();
+    const gyro = new GyroTracker();
+    gyro.start();
 
     const clock = new THREE.Clock();
     let frameId = 0;
@@ -125,6 +138,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
         if (!anchor || !t) {
           model.visible = false;
           stabilizerRef.current.reset();
+          lastAnchorRef.current = null;
+          gyro.take(); // drop rotation accumulated while nothing was tracked
         } else {
           const cw = container.clientWidth || window.innerWidth;
           const ch = container.clientHeight || window.innerHeight;
@@ -138,12 +153,22 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
             camera.updateProjectionMatrix();
           }
 
-          // Filter the corners (One Euro), compute the sticker pose, smooth it and keep it upright
+          // Follow the phone's own rotation (gyroscope) every frame, then correct with new QR readings
           const stab = stabilizerRef.current;
-          const raw = (anchor.cornerPoints?.length === 4 ? anchor.cornerPoints : boxCorners(anchor)).map(map);
-          const corners = stab.filterCorners(raw, delta);
-          const measured = qrPoseFromCorners(corners, focal, cw / 2, ch / 2);
-          const pose = measured ? uprightPose(stab.smoothPose(measured, delta), gravity.get()) : null;
+          const now = performance.now();
+          stab.applyCameraRotation(gyro.take());
+          if (lastAnchorRef.current !== anchor) {
+            lastAnchorRef.current = anchor;
+            const raw = (anchor.cornerPoints?.length === 4 ? anchor.cornerPoints : boxCorners(anchor)).map(map);
+            const measured = qrPoseFromCorners(raw, focal, cw / 2, ch / 2);
+            if (measured) stab.addMeasurement(measured, now, quadArea(raw) / (focal * focal));
+          }
+          // QR briefly not detected (motion blur): with a gyroscope the model stays put on the sticker;
+          // without one, hide it soon so it does not float in the wrong place
+          const lostFor = stab.msSinceMeasurement(now);
+          const smoothed = lostFor < (gyro.active ? 2500 : 700) ? stab.pose() : null;
+          const pose = smoothed ? uprightPose(smoothed, gravity.get()) : null;
+          if (!pose) model.visible = false;
           if (pose) {
             const size = BASE_MODEL_HEIGHT * (t.modelScale || 1) * userScaleRef.current;
             model.matrixAutoUpdate = false;
@@ -163,6 +188,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
 
     return () => {
       gravity.stop();
+      gyro.stop();
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       renderer.dispose();
