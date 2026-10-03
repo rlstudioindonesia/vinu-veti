@@ -15,9 +15,10 @@ import { QRStickerPrintModal } from './components/QRPrint/QRStickerPrintModal';
 import { AdminPanel } from './components/Admin/AdminPanel';
 import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 
-// The model stays visible this long after the QR was last seen (the scanner misses some frames).
-// Short, so the model does not float in a wrong place once the QR has really left the picture.
-const QR_LOST_TIMEOUT = 600;
+// The AR session for a sticker ends this long after the QR was last seen. While the camera moves the
+// scanner often misses the QR (motion blur); ThreeCanvas keeps the model on the sticker using the
+// gyroscope in the meantime.
+const QR_LOST_TIMEOUT = 2500;
 
 // Admin tools are in every build. In the Play Store build the entry is hidden (tap the "VINU & VETI"
 // badge 7 times) and protected by the Supabase admin account. `npm run dev` and `npm run build:admin`
