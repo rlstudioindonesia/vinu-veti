@@ -82,7 +82,7 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
           mixer.clipAction(res.animations[0]).play();
         }
 
-        modelGroup = normalizeModel(res.scene);
+        modelGroup = normalizeModel(res.scene).pivot;
         const s = 1.4 * (target.modelScale || 1.0);
         modelGroup.scale.setScalar(s);
         modelGroup.position.y = -0.7 + (target.elevationOffset || 0);
