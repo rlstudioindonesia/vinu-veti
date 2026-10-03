@@ -32,7 +32,8 @@ create policy "vv admin delete" on storage.objects for delete to authenticated u
 
 ## 4. Isi konfigurasi lalu build
 
-Buat file `web-app/.env`:
+Sudah diisi untuk project `ctowesyemrjkrjaitfft` di `web-app/.env` (ikut di-commit karena isinya publik).
+Untuk project lain, ganti isinya:
 
 ```
 VITE_SUPABASE_URL=https://xxxxxxxx.supabase.co

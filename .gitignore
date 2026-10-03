@@ -17,6 +17,7 @@ local.properties
 .env
 debug.keystore
 node_modules/
-web-app/.env
 web-app/.env.*.local
 web-app/.env.local
+# Public Supabase config (anon key only) is committed on purpose
+!web-app/.env
