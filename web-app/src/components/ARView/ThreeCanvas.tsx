@@ -166,7 +166,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
           // QR briefly not detected (motion blur): with a gyroscope the model stays put on the sticker;
           // without one, hide it soon so it does not float in the wrong place
           const lostFor = stab.msSinceMeasurement(now);
-          const smoothed = lostFor < (gyro.active ? 2500 : 700) ? stab.pose() : null;
+          const smoothed = lostFor < (gyro.active ? 2500 : 700) ? stab.pose(delta) : null;
           const pose = smoothed ? uprightPose(smoothed, gravity.get()) : null;
           if (!pose) model.visible = false;
           if (pose) {

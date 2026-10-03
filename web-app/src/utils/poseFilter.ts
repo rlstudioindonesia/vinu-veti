@@ -54,14 +54,18 @@ const DISTANCE_DEADBAND = 0.03;
  *   slowly, ignoring one-off flips caused by noisy corners on small QR codes.
  */
 export class QrPoseStabilizer {
+  // Target pose (updated by QR readings) and displayed pose (eases towards the target every frame)
   private pos: THREE.Vector3 | null = null;
   private rot = new THREE.Quaternion();
+  private shownPos: THREE.Vector3 | null = null;
+  private shownRot = new THREE.Quaternion();
   private flipCount = 0;
   private lastMeasurement = 0;
   private recentDist: number[] = [];
 
   reset() {
     this.pos = null;
+    this.shownPos = null;
     this.flipCount = 0;
     this.recentDist = [];
   }
@@ -77,6 +81,8 @@ export class QrPoseStabilizer {
     const inv = delta.clone().invert();
     this.pos.applyQuaternion(inv);
     this.rot.premultiply(inv);
+    this.shownPos?.applyQuaternion(inv);
+    this.shownRot.premultiply(inv);
   }
 
   /**
@@ -99,7 +105,7 @@ export class QrPoseStabilizer {
       this.flipCount++; // probably a misread: keep the previous rotation
     } else {
       this.flipCount = 0;
-      this.rot.slerp(q, reacquire ? 0.6 : 0.15);
+      this.rot.slerp(q, reacquire ? 0.6 : 0.1);
     }
 
     // Distance from the apparent size: area ≈ cos(tilt) / distance² for a unit square
@@ -117,7 +123,11 @@ export class QrPoseStabilizer {
     }
     // Direction (where on screen): follow quickly. Distance (size on screen): slow, with a dead band.
     const dist = this.pos.length();
-    const nextDir = this.pos.clone().normalize().lerp(dir, 0.5).normalize();
+    // Tiny shifts (a few px) are corner noise: follow them only slightly. Real moves: follow fast.
+    const curDir = this.pos.clone().normalize();
+    const shift = curDir.angleTo(dir); // radians; 0.001 ≈ 1 px at a typical focal length
+    const kDir = THREE.MathUtils.clamp((shift - 0.002) / 0.02, 0, 1) * 0.85 + 0.08;
+    const nextDir = curDir.lerp(dir, kDir).normalize();
     const ratio = median / dist;
     let nextDist = dist;
     if (Math.abs(ratio - 1) > 0.5) nextDist = median; // moved much closer/further: follow
@@ -125,8 +135,17 @@ export class QrPoseStabilizer {
     this.pos.copy(nextDir.multiplyScalar(nextDist));
   }
 
-  pose(): THREE.Matrix4 | null {
-    return this.pos ? new THREE.Matrix4().compose(this.pos, this.rot, new THREE.Vector3(1, 1, 1)) : null;
+  /** Displayed pose for this frame: eases smoothly towards the target (no jumps on each QR reading). */
+  pose(dt: number): THREE.Matrix4 | null {
+    if (!this.pos) return null;
+    if (!this.shownPos) {
+      this.shownPos = this.pos.clone();
+      this.shownRot.copy(this.rot);
+    } else {
+      this.shownPos.lerp(this.pos, 1 - Math.exp(-dt / 0.06));
+      this.shownRot.slerp(this.rot, 1 - Math.exp(-dt / 0.15));
+    }
+    return new THREE.Matrix4().compose(this.shownPos, this.shownRot, new THREE.Vector3(1, 1, 1));
   }
 }
 
@@ -149,7 +168,8 @@ export class GyroTracker {
     const angle = THREE.MathUtils.degToRad(screen.orientation?.angle ?? 0);
     w.applyAxisAngle(new THREE.Vector3(0, 0, 1), -angle);
     const mag = w.length();
-    if (mag * dt > 1e-5) {
+    // Below ~0.8°/s it is sensor noise of a phone lying still, not real rotation
+    if (mag > 0.014 && mag * dt > 1e-5) {
       this.pending.multiply(new THREE.Quaternion().setFromAxisAngle(w.divideScalar(mag), mag * dt));
     }
     this.lastEvent = now;
@@ -192,9 +212,11 @@ export class GravityTracker {
     // Compensate a rotated screen (landscape)
     const angle = THREE.MathUtils.degToRad(screen.orientation?.angle ?? 0);
     v.applyAxisAngle(new THREE.Vector3(0, 0, 1), -angle).normalize();
-    // Low-pass: keep gravity, drop hand shake
-    this.up = this.up ? this.up.lerp(v, 0.15).normalize() : v;
-    this.lastEvent = performance.now();
+    // Low-pass (~0.35 s): keep gravity, drop hand shake
+    const now = performance.now();
+    const dt = this.lastEvent ? Math.min((now - this.lastEvent) / 1000, 0.1) : 0;
+    this.up = this.up ? this.up.lerp(v, 1 - Math.exp(-dt / 0.35)).normalize() : v;
+    this.lastEvent = now;
   };
 
   start() {
