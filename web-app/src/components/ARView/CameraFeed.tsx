@@ -8,7 +8,7 @@ interface CameraFeedProps {
 }
 
 // Pause between scans (ms). A new scan only starts after the previous one finished.
-const SCAN_INTERVAL = 90;
+const SCAN_INTERVAL = 30;
 
 export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, videoRef }) => {
   const [cameraError, setCameraError] = useState<string | null>(null);

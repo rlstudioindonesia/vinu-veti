@@ -13,7 +13,11 @@ interface QRStickerPrintModalProps {
 function useQrDataUrl(text: string, width = 600) {
   const [dataUrl, setDataUrl] = useState<string>('');
   useEffect(() => {
-    QRCode.toDataURL(text, { width, margin: 2, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } })
+    // Version 3+ QR codes contain an alignment pattern, so they still scan when the book is seen at an
+    // angle and give accurate corners for placing the 3D model. Longer texts fall back to the auto size.
+    const opts = { width, margin: 2, errorCorrectionLevel: 'Q' as const, color: { dark: '#000000', light: '#ffffff' } };
+    QRCode.toDataURL(text, { ...opts, version: 3 })
+      .catch(() => QRCode.toDataURL(text, opts))
       .then(setDataUrl)
       .catch((err) => console.error(err));
   }, [text, width]);

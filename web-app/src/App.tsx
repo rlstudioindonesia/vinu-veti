@@ -15,8 +15,9 @@ import { QRStickerPrintModal } from './components/QRPrint/QRStickerPrintModal';
 import { AdminPanel } from './components/Admin/AdminPanel';
 import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 
-// The model stays visible this long after the QR was last seen (scanner misses some frames)
-const QR_LOST_TIMEOUT = 1200;
+// The model stays visible this long after the QR was last seen (the scanner misses some frames).
+// Short, so the model does not float in a wrong place once the QR has really left the picture.
+const QR_LOST_TIMEOUT = 600;
 
 // Admin tools are in every build. In the Play Store build the entry is hidden (tap the "VINU & VETI"
 // badge 7 times) and protected by the Supabase admin account. `npm run dev` and `npm run build:admin`

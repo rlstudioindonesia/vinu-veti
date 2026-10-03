@@ -4,6 +4,7 @@ import { ARQRTarget } from '../../types/arBook';
 import { QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries, resolveModelSource } from '../../services/db';
 import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
+import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { Sparkles, Hand, AlertTriangle } from 'lucide-react';
 
 interface ThreeCanvasProps {
@@ -13,22 +14,35 @@ interface ThreeCanvasProps {
   onCycleNextAsset: () => void;
 }
 
-const FOV = 50;
-const TAN_HALF_FOV = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
 // Model height in QR-sticker widths when modelScale = 1
 const BASE_MODEL_HEIGHT = 2.0;
+// Corner smoothing: steady when the camera is still, follows instantly when it moves
+const SMOOTH_STILL = 0.35;
+const SMOOTH_FAST_PX = 24; // movement (px per frame) at which the model follows without smoothing
+// Between two scans, corners are extrapolated from the last measured velocity, at most this far ahead
+const MAX_PREDICT_MS = 160;
 
-/** Where the QR sticker is on screen (CSS pixels), taking the object-cover crop of the video into account. */
-function anchorToScreen(anchor: QRAnchor, cw: number, ch: number) {
+/** Video pixels → screen (CSS) pixels, taking the object-cover crop of the video into account. */
+function videoToScreen(anchor: QRAnchor, cw: number, ch: number) {
   const scale = Math.max(cw / anchor.videoWidth, ch / anchor.videoHeight);
   const offX = (cw - anchor.videoWidth * scale) / 2;
   const offY = (ch - anchor.videoHeight * scale) / 2;
-  return {
-    x: offX + (anchor.x + anchor.width / 2) * scale,
-    y: offY + (anchor.y + anchor.height / 2) * scale,
-    size: Math.max(anchor.width, anchor.height) * scale,
-  };
+  return { scale, map: (p: Point2): Point2 => ({ x: offX + p.x * scale, y: offY + p.y * scale }) };
 }
+
+/** Fallback when no corners are known: corners of the axis-aligned box (QR assumed facing the camera). */
+function boxCorners(a: QRAnchor): Point2[] {
+  return [
+    { x: a.x, y: a.y },
+    { x: a.x + a.width, y: a.y },
+    { x: a.x + a.width, y: a.y + a.height },
+    { x: a.x, y: a.y + a.height },
+  ];
+}
+
+// Model space → QR space: the model's up (+Y) becomes the QR normal (+Z, out of the paper) and the
+// model's front (+Z) faces the QR's bottom edge, i.e. the reader holding the book.
+const STAND_ON_QR = new THREE.Matrix4().makeRotationX(Math.PI / 2);
 
 export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, activeAssetIndex, onCycleNextAsset }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,8 +61,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
   const targetRef = useRef<ARQRTarget | null>(target);
   targetRef.current = target;
 
-  // Smoothed placement: screen position (px) and QR size (px)
-  const smoothRef = useRef<{ x: number; y: number; size: number } | null>(null);
+  // Smoothed QR corners on screen (px)
+  const smoothRef = useRef<Point2[] | null>(null);
+  // Last two measurements, for motion prediction between scans
+  const trackRef = useRef<{ anchor: QRAnchor; t: number; corners: Point2[]; vel: Point2[] } | null>(null);
 
   // Touch interaction
   const yawRef = useRef<number>(0);
@@ -70,7 +86,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
 
     const scene = new THREE.Scene();
     sceneRef.current = scene;
-    const camera = new THREE.PerspectiveCamera(FOV, 1, 0.01, 200);
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 500);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'default' });
@@ -113,29 +129,62 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
         if (!anchor || !t) {
           model.visible = false;
           smoothRef.current = null;
+          trackRef.current = null;
         } else {
           const cw = container.clientWidth || window.innerWidth;
           const ch = container.clientHeight || window.innerHeight;
-          const s = anchorToScreen(anchor, cw, ch);
-          const prev = smoothRef.current;
-          // Snap on first detection, then smooth out scanner jitter
-          smoothRef.current = prev
-            ? { x: prev.x + (s.x - prev.x) * 0.35, y: prev.y + (s.y - prev.y) * 0.35, size: prev.size + (s.size - prev.size) * 0.25 }
-            : s;
-          const p = smoothRef.current;
+          const { scale: coverScale, map } = videoToScreen(anchor, cw, ch);
 
-          // Put the QR plane at the depth where 1 world unit = QR width on screen.
-          // The model then sits on the sticker and grows/shrinks as the camera moves closer/further.
-          const qrPx = Math.max(p.size, 8);
-          const depth = THREE.MathUtils.clamp(ch / (2 * TAN_HALF_FOV * qrPx), 0.2, 150);
-          const ndcX = (p.x / cw) * 2 - 1;
-          const ndcY = -((p.y / ch) * 2 - 1);
-          const halfH = depth * TAN_HALF_FOV;
-          model.position.set(ndcX * halfH * camera.aspect, ndcY * halfH + (t.elevationOffset || 0), -depth);
-          model.rotation.set(0.12, yawRef.current, 0);
-          const scale = BASE_MODEL_HEIGHT * (t.modelScale || 1) * userScaleRef.current;
-          model.scale.setScalar(scale);
-          model.visible = true;
+          // Match the 3D camera to the phone camera so 3D and video line up
+          const focal = focalFromVideo(anchor.videoWidth, anchor.videoHeight) * coverScale;
+          const fov = THREE.MathUtils.radToDeg(2 * Math.atan(ch / 2 / focal));
+          if (Math.abs(camera.fov - fov) > 0.01) {
+            camera.fov = fov;
+            camera.updateProjectionMatrix();
+          }
+
+          // New measurement → update velocity (px/ms) from the previous one
+          const now = performance.now();
+          const track = trackRef.current;
+          if (!track || track.anchor !== anchor) {
+            const corners = (anchor.cornerPoints?.length === 4 ? anchor.cornerPoints : boxCorners(anchor)).map(map);
+            const t0 = anchor.timestamp ? now - (Date.now() - anchor.timestamp) : now;
+            const dt = track ? t0 - track.t : 0;
+            const vel =
+              track && dt > 5 && dt < 300
+                ? corners.map((c, i) => ({ x: (c.x - track.corners[i].x) / dt, y: (c.y - track.corners[i].y) / dt }))
+                : corners.map(() => ({ x: 0, y: 0 }));
+            trackRef.current = { anchor, t: t0, corners, vel };
+          }
+          const tr = trackRef.current!;
+
+          // Predict where the QR is now (camera keeps moving between scans)
+          const ahead = Math.min(Math.max(now - tr.t, 0), MAX_PREDICT_MS);
+          const target = tr.corners.map((c, i) => ({ x: c.x + tr.vel[i].x * ahead, y: c.y + tr.vel[i].y * ahead }));
+
+          // Adaptive smoothing: damp jitter when still, no lag when moving
+          const prev = smoothRef.current;
+          if (!prev) {
+            smoothRef.current = target;
+          } else {
+            const move = target.reduce((sum, c, i) => sum + Math.hypot(c.x - prev[i].x, c.y - prev[i].y), 0) / 4;
+            const k = Math.min(1, SMOOTH_STILL + (1 - SMOOTH_STILL) * (move / SMOOTH_FAST_PX));
+            smoothRef.current = prev.map((p, i) => ({ x: p.x + (target[i].x - p.x) * k, y: p.y + (target[i].y - p.y) * k }));
+          }
+
+          // Pose of the sticker in 3D, then stand the model upright on it (perpendicular to the QR)
+          const pose = qrPoseFromCorners(smoothRef.current, focal, cw / 2, ch / 2);
+          if (pose) {
+            const size = BASE_MODEL_HEIGHT * (t.modelScale || 1) * userScaleRef.current;
+            model.matrixAutoUpdate = false;
+            model.matrix
+              .copy(pose)
+              .multiply(STAND_ON_QR)
+              .multiply(new THREE.Matrix4().makeTranslation(0, t.elevationOffset || 0, 0))
+              .multiply(new THREE.Matrix4().makeRotationY(yawRef.current))
+              .multiply(new THREE.Matrix4().makeScale(size, size, size));
+            model.visible = true;
+          }
         }
       }
       renderer.render(scene, camera);
