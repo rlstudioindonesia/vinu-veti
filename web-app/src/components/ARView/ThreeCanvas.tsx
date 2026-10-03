@@ -5,6 +5,7 @@ import { QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries, resolveModelSource } from '../../services/db';
 import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
+import { GravityTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
 import { Sparkles, Hand, AlertTriangle } from 'lucide-react';
 
 interface ThreeCanvasProps {
@@ -16,12 +17,6 @@ interface ThreeCanvasProps {
 
 // Model height in QR-sticker widths when modelScale = 1
 const BASE_MODEL_HEIGHT = 2.0;
-// Corner smoothing: steady when the camera is still, follows instantly when it moves
-const SMOOTH_STILL = 0.35;
-const SMOOTH_FAST_PX = 24; // movement (px per frame) at which the model follows without smoothing
-// Between two scans, corners are extrapolated from the last measured velocity, at most this far ahead
-const MAX_PREDICT_MS = 160;
-
 /** Video pixels → screen (CSS) pixels, taking the object-cover crop of the video into account. */
 function videoToScreen(anchor: QRAnchor, cw: number, ch: number) {
   const scale = Math.max(cw / anchor.videoWidth, ch / anchor.videoHeight);
@@ -61,10 +56,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
   const targetRef = useRef<ARQRTarget | null>(target);
   targetRef.current = target;
 
-  // Smoothed QR corners on screen (px)
-  const smoothRef = useRef<Point2[] | null>(null);
-  // Last two measurements, for motion prediction between scans
-  const trackRef = useRef<{ anchor: QRAnchor; t: number; corners: Point2[]; vel: Point2[] } | null>(null);
+  // Jitter filtering of the tracked QR + real-world "up" from the accelerometer
+  const stabilizerRef = useRef(new QrPoseStabilizer());
 
   // Touch interaction
   const yawRef = useRef<number>(0);
@@ -115,6 +108,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(container);
 
+    const gravity = new GravityTracker();
+    gravity.start();
+
     const clock = new THREE.Clock();
     let frameId = 0;
     const animate = () => {
@@ -128,8 +124,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
       if (model) {
         if (!anchor || !t) {
           model.visible = false;
-          smoothRef.current = null;
-          trackRef.current = null;
+          stabilizerRef.current.reset();
         } else {
           const cw = container.clientWidth || window.innerWidth;
           const ch = container.clientHeight || window.innerHeight;
@@ -143,37 +138,12 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
             camera.updateProjectionMatrix();
           }
 
-          // New measurement → update velocity (px/ms) from the previous one
-          const now = performance.now();
-          const track = trackRef.current;
-          if (!track || track.anchor !== anchor) {
-            const corners = (anchor.cornerPoints?.length === 4 ? anchor.cornerPoints : boxCorners(anchor)).map(map);
-            const t0 = anchor.timestamp ? now - (Date.now() - anchor.timestamp) : now;
-            const dt = track ? t0 - track.t : 0;
-            const vel =
-              track && dt > 5 && dt < 300
-                ? corners.map((c, i) => ({ x: (c.x - track.corners[i].x) / dt, y: (c.y - track.corners[i].y) / dt }))
-                : corners.map(() => ({ x: 0, y: 0 }));
-            trackRef.current = { anchor, t: t0, corners, vel };
-          }
-          const tr = trackRef.current!;
-
-          // Predict where the QR is now (camera keeps moving between scans)
-          const ahead = Math.min(Math.max(now - tr.t, 0), MAX_PREDICT_MS);
-          const target = tr.corners.map((c, i) => ({ x: c.x + tr.vel[i].x * ahead, y: c.y + tr.vel[i].y * ahead }));
-
-          // Adaptive smoothing: damp jitter when still, no lag when moving
-          const prev = smoothRef.current;
-          if (!prev) {
-            smoothRef.current = target;
-          } else {
-            const move = target.reduce((sum, c, i) => sum + Math.hypot(c.x - prev[i].x, c.y - prev[i].y), 0) / 4;
-            const k = Math.min(1, SMOOTH_STILL + (1 - SMOOTH_STILL) * (move / SMOOTH_FAST_PX));
-            smoothRef.current = prev.map((p, i) => ({ x: p.x + (target[i].x - p.x) * k, y: p.y + (target[i].y - p.y) * k }));
-          }
-
-          // Pose of the sticker in 3D, then stand the model upright on it (perpendicular to the QR)
-          const pose = qrPoseFromCorners(smoothRef.current, focal, cw / 2, ch / 2);
+          // Filter the corners (One Euro), compute the sticker pose, smooth it and keep it upright
+          const stab = stabilizerRef.current;
+          const raw = (anchor.cornerPoints?.length === 4 ? anchor.cornerPoints : boxCorners(anchor)).map(map);
+          const corners = stab.filterCorners(raw, delta);
+          const measured = qrPoseFromCorners(corners, focal, cw / 2, ch / 2);
+          const pose = measured ? uprightPose(stab.smoothPose(measured, delta), gravity.get()) : null;
           if (pose) {
             const size = BASE_MODEL_HEIGHT * (t.modelScale || 1) * userScaleRef.current;
             model.matrixAutoUpdate = false;
@@ -192,6 +162,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, acti
     animate();
 
     return () => {
+      gravity.stop();
       cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
       renderer.dispose();
