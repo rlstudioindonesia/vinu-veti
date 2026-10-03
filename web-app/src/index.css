@@ -72,3 +72,8 @@ html, body, #root {
 .home-font {
   font-family: 'Fredoka', ui-rounded, system-ui, sans-serif;
 }
+
+@keyframes splash-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}

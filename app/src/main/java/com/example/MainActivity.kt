@@ -32,6 +32,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -279,7 +280,11 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    enableEdgeToEdge()
+    // Light app background: always use dark status/navigation bar icons
+    enableEdgeToEdge(
+      statusBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
+      navigationBarStyle = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+    )
 
     setContent {
       MyApplicationTheme {
@@ -344,7 +349,7 @@ fun ARBookScreen(
   Scaffold(
     modifier = modifier.fillMaxSize(),
     contentWindowInsets = WindowInsets.safeDrawing,
-    containerColor = Color.Black
+    containerColor = Color(0xFFCFEFFB)
   ) { innerPadding ->
     Box(
       modifier = Modifier
@@ -363,7 +368,7 @@ fun ARBookScreen(
               ViewGroup.LayoutParams.MATCH_PARENT
             )
 
-            setBackgroundColor(android.graphics.Color.BLACK)
+            setBackgroundColor(android.graphics.Color.parseColor("#CFEFFB"))
             setLayerType(android.view.View.LAYER_TYPE_NONE, null)
 
             val modelsDir = File(ctx.filesDir, "ar_models").apply { mkdirs() }
@@ -570,7 +575,7 @@ fun ARBookScreen(
           modifier = Modifier.padding(16.dp)
         ) {
           CircularProgressIndicator(
-            color = EmeraldPrimary,
+            color = Color(0xFF1BA7A0),
             modifier = Modifier
               .size(42.dp)
               .testTag("app_loading_indicator")
@@ -579,7 +584,7 @@ fun ARBookScreen(
           Text(
             text = "Memuat Vinu Veti...",
             style = MaterialTheme.typography.bodySmall.copy(
-              color = Color(0xFF94A3B8)
+              color = Color(0xFF173A6B)
             )
           )
         }
