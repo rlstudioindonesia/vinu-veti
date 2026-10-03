@@ -34,6 +34,17 @@ const STRINGS = {
     en: 'AR content is not available yet. Connect to the internet once to download it.',
     tl: 'Wala pang AR na nilalaman. Kumonekta sa internet nang isang beses para ma-download ito.',
   },
+  downloadingContent: {
+    id: 'Mengunduh konten AR {done}/{total}… biarkan aplikasi terbuka',
+    en: 'Downloading AR content {done}/{total}… keep the app open',
+    tl: 'Dina-download ang AR na nilalaman {done}/{total}… huwag isara ang app',
+  },
+  contentReady: { id: 'Semua konten siap dipakai offline ✓', en: 'All content is ready to use offline ✓', tl: 'Handa nang gamitin offline ang lahat ✓' },
+  contentPartial: {
+    id: 'Sebagian konten belum terunduh. Akan dicoba lagi saat online.',
+    en: 'Some content is not downloaded yet. It will retry when online.',
+    tl: 'May nilalamang hindi pa na-download. Susubukan muli kapag online.',
+  },
   soundOn: { id: 'Nyalakan suara', en: 'Turn sound on', tl: 'Buksan ang tunog' },
   soundOff: { id: 'Matikan suara', en: 'Turn sound off', tl: 'Patayin ang tunog' },
   language: { id: 'Bahasa', en: 'Language', tl: 'Wika' },

@@ -145,7 +145,21 @@ async function storedSha(job: MirrorJob): Promise<string | null> {
  * (streamed from the internet); files are then mirrored in the background for offline use. Only files
  * whose SHA-256 differs from the local copy are downloaded.
  */
-export async function syncContentPack(onMetadataChanged?: () => void): Promise<void> {
+export interface SyncProgress {
+  done: number;
+  total: number;
+}
+
+/** Result of a sync: how many files were mirrored and whether everything is now available offline. */
+export interface SyncResult {
+  downloaded: number;
+  failed: number;
+}
+
+export async function syncContentPack(
+  onMetadataChanged?: () => void,
+  onProgress?: (p: SyncProgress) => void
+): Promise<SyncResult> {
   const [bundled, remote] = await Promise.all([
     fetchManifest(BUNDLED_BASE, 5000),
     REMOTE_CONTENT_BASE && navigator.onLine !== false ? fetchManifest(REMOTE_CONTENT_BASE, 10000) : Promise.resolve(null),
@@ -159,22 +173,32 @@ export async function syncContentPack(onMetadataChanged?: () => void): Promise<v
   }
   // Server unreachable (offline) but this phone already has online content: keep it as it is.
   // Falling back to the (older) bundled pack here would delete the mirrored stickers.
-  if (!remote && REMOTE_CONTENT_BASE && applied?.startsWith('remote:')) return;
+  if (!remote && REMOTE_CONTENT_BASE && applied?.startsWith('remote:')) return { downloaded: 0, failed: 0 };
 
   let manifest = bundled;
   let base = BUNDLED_BASE;
-  if (remote && (!bundled || remote.updatedAt >= bundled.updatedAt)) {
+  // Same version online as inside the APK: use the APK copy, nothing to download
+  if (remote && (!bundled || remote.updatedAt > bundled.updatedAt)) {
     manifest = remote;
     base = REMOTE_CONTENT_BASE;
   }
-  if (!manifest) return;
+  if (!manifest) return { downloaded: 0, failed: 0 };
 
   const isRemote = base === REMOTE_CONTENT_BASE;
   const stamp = `${isRemote ? 'remote' : 'bundled'}:${manifest.updatedAt}`;
-  if (applied === stamp) return;
+  if (applied === stamp) return { downloaded: 0, failed: 0 };
 
   const existing = await ARDatabase.getAllTargets();
   const byId = new Map(existing.map((t) => [t.id, t]));
+
+  // SHA-256 → file inside the APK (from the bundled manifest)
+  const bundledBySha = new Map<string, string>();
+  for (const bt of bundled?.targets || []) {
+    const add = (file?: string, sha?: string) => file && sha && bundledBySha.set(sha, new URL(file, BUNDLED_BASE).href);
+    add(bt.model, bt.modelSha);
+    (bt.assets || []).forEach((a) => add(a.file, a.sha));
+    Object.values(packVoices(bt)).forEach((v) => add(v?.file, v?.sha));
+  }
   let changed = false;
   const queue: MirrorJob[] = [];
 
@@ -185,8 +209,25 @@ export async function syncContentPack(onMetadataChanged?: () => void): Promise<v
     const target = toTarget(p, base, local?.createdAt ?? Date.now());
 
     if (isRemote) {
+      // Files that are byte-identical to ones shipped inside the APK are read from the APK: no download
+      if (bundledBySha.size > 0) {
+        const fromApk = (url: string | undefined, sha: string | undefined) => (sha && bundledBySha.get(sha)) || url;
+        target.customGlbUrl = fromApk(target.customGlbUrl, p.modelSha);
+        target.assets = (target.assets || []).map((a, i) => ({ ...a, url: fromApk(a.url, p.assets?.[i]?.sha) }));
+        const pv = packVoices(p);
+        for (const lang of VOICE_LANGS) {
+          const v = target.voices?.[lang];
+          if (v) v.url = fromApk(v.url, pv[lang]?.sha);
+        }
+      }
       const stale: MirrorJob[] = [];
       for (const job of mirrorJobs(p, target)) {
+        if (job.url.startsWith(BUNDLED_BASE)) {
+          // Served from the APK; drop an outdated local copy so it does not hide the APK file
+          const sha = await storedSha(job);
+          if (sha && sha !== job.sha) await ARDatabase.deleteAssetKeys([job.key]);
+          continue;
+        }
         const sha = await storedSha(job);
         if (!sha || !job.sha || sha !== job.sha) stale.push(job);
       }
@@ -217,16 +258,22 @@ export async function syncContentPack(onMetadataChanged?: () => void): Promise<v
 
   // Mirror changed files one by one (keeps memory low on cheap phones)
   let allOk = true;
+  let downloaded = 0;
+  let failed = 0;
+  if (queue.length > 0) onProgress?.({ done: 0, total: queue.length });
   for (const job of queue) {
     try {
       const data = await download(job.url);
       const sha = job.sha || (await sha256Hex(data));
       if (job.kind === 'model') await ARDatabase.saveAssetBlob(job.id, data, job.name, sha);
       else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha, job.lang);
+      downloaded++;
     } catch (err) {
       console.warn('Mirror skipped, retried next time:', job.url, err);
       allOk = false;
+      failed++;
     }
+    onProgress?.({ done: downloaded + failed, total: queue.length });
   }
 
   if (allOk) {
@@ -236,6 +283,7 @@ export async function syncContentPack(onMetadataChanged?: () => void): Promise<v
       // ignore
     }
   }
+  return { downloaded, failed };
 }
 
 function extOf(name: string | undefined, fallback: string): string {

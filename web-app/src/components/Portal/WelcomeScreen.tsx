@@ -4,7 +4,14 @@ import { soundService } from '../../services/soundService';
 import { LANGS, useI18n } from '../../i18n';
 import { MASCOT_SRC, Cloud, Star, Spark, Hills, Leaf, SKY_GRADIENT } from '../Common/Scenery';
 
+export interface ContentStatus {
+  phase: 'idle' | 'downloading' | 'ready' | 'partial';
+  done: number;
+  total: number;
+}
+
 interface WelcomeScreenProps {
+  contentStatus: ContentStatus;
   onOpenLanguage: () => void;
   onStartCamera: () => void;
   onOpenAdmin: () => void;
@@ -13,7 +20,7 @@ interface WelcomeScreenProps {
   hasContent: boolean;
 }
 
-export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onOpenAdmin, showAdminButton, onOpenPrivacy, onOpenLanguage, hasContent }) => {
+export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onOpenAdmin, showAdminButton, onOpenPrivacy, onOpenLanguage, hasContent, contentStatus }) => {
   const { t, lang } = useI18n();
   const currentLang = LANGS.find((l) => l.code === lang)!;
   const [soundEnabled, setSoundEnabled] = useState<boolean>(!soundService.getMuted());
@@ -152,7 +159,26 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
             <ChevronRight className="h-7 w-7 shrink-0 text-[#173A6B]" strokeWidth={3} />
           </button>
 
-          {!hasContent && (
+          {contentStatus.phase !== 'idle' && (
+            <div
+              className={`flex items-center justify-center gap-2 rounded-2xl px-3 py-2 text-center text-xs font-semibold ${
+                contentStatus.phase === 'partial' ? 'bg-amber-100 text-amber-800' : 'bg-white/85 text-[#173A6B]'
+              }`}
+            >
+              {contentStatus.phase === 'downloading' && (
+                <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-[#1BA7A0] border-t-transparent" />
+              )}
+              <span>
+                {contentStatus.phase === 'downloading'
+                  ? t('downloadingContent').replace('{done}', String(contentStatus.done)).replace('{total}', String(contentStatus.total))
+                  : contentStatus.phase === 'ready'
+                    ? t('contentReady')
+                    : t('contentPartial')}
+              </span>
+            </div>
+          )}
+
+          {!hasContent && contentStatus.phase !== 'downloading' && (
             <p className="rounded-2xl bg-white/80 px-3 py-2 text-center text-xs font-semibold text-[#173A6B]">
               {showAdminButton
                 ? t('noContentAdmin')

@@ -15,6 +15,7 @@ import { QRStickerPrintModal } from './components/QRPrint/QRStickerPrintModal';
 import { AdminPanel } from './components/Admin/AdminPanel';
 import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 import { LanguagePicker } from './components/Portal/LanguagePicker';
+import type { ContentStatus } from './components/Portal/WelcomeScreen';
 import { loadSavedLang, useI18n } from './i18n';
 
 // The AR session for a sticker ends this long after the QR was last seen. While the camera moves the
@@ -50,6 +51,8 @@ export default function App() {
   const qrLossTimerRef = useRef<number | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
+  // Mirroring of online content to the phone (shown on the home screen)
+  const [contentStatus, setContentStatus] = useState<ContentStatus>({ phase: 'idle', done: 0, total: 0 });
   const [isAdminLoginOpen, setIsAdminLoginOpen] = useState<boolean>(false);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState<boolean>(false);
@@ -73,8 +76,16 @@ export default function App() {
       running = true;
       lastRun = Date.now();
       try {
-        await syncContentPack(() => loadTargetsFromDB());
+        const result = await syncContentPack(
+          () => loadTargetsFromDB(),
+          (p) => setContentStatus({ phase: 'downloading', ...p })
+        );
         await loadTargetsFromDB();
+        if (result.failed > 0) setContentStatus({ phase: 'partial', done: 0, total: 0 });
+        else if (result.downloaded > 0) {
+          setContentStatus({ phase: 'ready', done: 0, total: 0 });
+          window.setTimeout(() => setContentStatus((c) => (c.phase === 'ready' ? { phase: 'idle', done: 0, total: 0 } : c)), 5000);
+        } else setContentStatus((c) => (c.phase === 'downloading' ? { phase: 'idle', done: 0, total: 0 } : c));
       } catch (e) {
         console.warn('Content sync notice:', e);
       } finally {
@@ -151,6 +162,7 @@ export default function App() {
           onOpenPrivacy={() => setIsPrivacyModalOpen(true)}
           onOpenLanguage={() => setIsLanguagePickerOpen(true)}
           hasContent={targets.length > 0}
+          contentStatus={contentStatus}
         />
       )}
 

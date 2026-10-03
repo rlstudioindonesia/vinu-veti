@@ -9,6 +9,10 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Environment
 import android.print.PrintAttributes
 import android.print.PrintManager
@@ -96,6 +100,42 @@ import java.io.File
  * - Permanent: Never wiped by browser cache limits or Android low-memory garbage collection
  * - High-speed direct streaming to Three.js GLTFLoader via WebViewAssetLoader InternalStoragePathHandler
  */
+/**
+ * Phone orientation from Android's fused rotation sensor (gyroscope + accelerometer, no magnetometer
+ * drift). WebView's own `devicemotion` is missing or unreliable on many phones; this gives the AR view
+ * an accurate rotation with known axes (x right, y up, z out of the screen), polled every frame.
+ */
+object RotationSensor : SensorEventListener {
+  @Volatile private var latest: String = ""
+  private var manager: SensorManager? = null
+  private val q = FloatArray(4)
+
+  fun start(context: Context) {
+    val sm = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager ?: return
+    val sensor = sm.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+      ?: sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+      ?: return
+    manager = sm
+    sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+  }
+
+  fun stop() {
+    manager?.unregisterListener(this)
+    manager = null
+    latest = ""
+  }
+
+  /** "w,x,y,z" of the device orientation, or "" when there is no rotation sensor. */
+  fun read(): String = latest
+
+  override fun onSensorChanged(event: SensorEvent) {
+    SensorManager.getQuaternionFromVector(q, event.values)
+    latest = "${q[0]},${q[1]},${q[2]},${q[3]}"
+  }
+
+  override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+}
+
 class NativeStorageBridge(
   private val context: Context,
   private val webViewProvider: () -> WebView?
@@ -231,6 +271,10 @@ class NativeStorageBridge(
     }
   }
 
+  /** Device orientation quaternion "w,x,y,z" from the rotation sensor ("" if unavailable). */
+  @JavascriptInterface
+  fun getRotationQuat(): String = RotationSensor.read()
+
   @JavascriptInterface
   fun vibrate(durationMs: Long) {
     try {
@@ -277,6 +321,16 @@ class MainActivity : ComponentActivity() {
       }
       fileUploadCallback = null
     }
+
+  override fun onResume() {
+    super.onResume()
+    RotationSensor.start(this)
+  }
+
+  override fun onPause() {
+    RotationSensor.stop()
+    super.onPause()
+  }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)

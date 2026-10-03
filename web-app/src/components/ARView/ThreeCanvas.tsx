@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
-import { QRAnchor } from '../../services/barcodeScanner';
+import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries, resolveModelSource } from '../../services/db';
 import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
@@ -96,6 +96,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   const lastAnchorRef = useRef<QRAnchor | null>(null);
   // Previous QR reading (centre direction + capture time), to calibrate the gyroscope
   const lastReadingRef = useRef<{ dir: THREE.Vector3; t: number } | null>(null);
+  // Diagnostics overlay (tap the sticker name 5x in the AR view)
+  const statsRef = useRef<{ reads: number[]; latency: number }>({ reads: [], latency: 0 });
+  const [debugText, setDebugText] = useState<string | null>(null);
+  const gyroRef = useRef<GyroTracker | null>(null);
 
   // Touch interaction
   const yawRef = useRef<number>(0);
@@ -155,6 +159,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     gravity.start();
     const gyro = new GyroTracker();
     gyro.start();
+    gyroRef.current = gyro;
 
     const clock = new THREE.Clock();
     let frameId = 0;
@@ -174,6 +179,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           stabilizerRef.current.reset();
           lastAnchorRef.current = null;
           lastReadingRef.current = null;
+          gyro.poll();
           gyro.take(); // drop rotation accumulated while nothing was tracked
         } else {
           const cw = container.clientWidth || window.innerWidth;
@@ -191,6 +197,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           // Follow the phone's own rotation (gyroscope) every frame, then correct with new QR readings
           const stab = stabilizerRef.current;
           const now = performance.now();
+          gyro.poll();
           stab.applyCameraRotation(gyro.take());
           if (lastAnchorRef.current !== anchor) {
             lastAnchorRef.current = anchor;
@@ -199,6 +206,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
             if (measured) {
               // The reading describes the frame captured a moment ago (scan latency)
               const capturedAt = anchor.timestamp ? now - (Date.now() - anchor.timestamp) : now;
+              const st = statsRef.current;
+              st.reads.push(now);
+              st.latency = st.latency * 0.8 + (now - capturedAt) * 0.2;
               const dir = new THREE.Vector3().setFromMatrixPosition(measured).normalize();
               const prev = lastReadingRef.current;
               if (prev && capturedAt - prev.t < 400) gyro.calibrate(prev.dir, prev.t, dir, capturedAt);
@@ -359,6 +369,33 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     setShowHint(false);
   }, [activateStep]);
 
+  // Diagnostics overlay, toggled by tapping the sticker name 5 times (see ARScannerOverlay)
+  useEffect(() => {
+    let timer: number | undefined;
+    const toggle = () => {
+      if (timer) {
+        window.clearInterval(timer);
+        timer = undefined;
+        setDebugText(null);
+        return;
+      }
+      timer = window.setInterval(() => {
+        const now = performance.now();
+        const st = statsRef.current;
+        st.reads = st.reads.filter((t) => now - t < 1000);
+        setDebugText(
+          `Pembaca QR: ${barcodeScanner.lastMethod || '-'} · ${st.reads.length} baca/dtk · telat ${Math.round(st.latency)} ms\n` +
+            `Sensor gerak: ${gyroRef.current?.status() ?? '-'}`
+        );
+      }, 250);
+    };
+    window.addEventListener('vv-debug-toggle', toggle);
+    return () => {
+      window.removeEventListener('vv-debug-toggle', toggle);
+      if (timer) window.clearInterval(timer);
+    };
+  }, []);
+
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     pointerRef.current = { down: true, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY };
   };
@@ -445,6 +482,12 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           <AlertTriangle className="w-3.5 h-3.5" />
           <span>{tr(loadError === 'missing' ? 'modelMissing' : 'modelFailed')}</span>
         </div>
+      )}
+
+      {debugText && (
+        <pre className="absolute bottom-6 left-3 right-3 whitespace-pre-wrap rounded-xl bg-black/75 px-3 py-2 text-[11px] leading-snug text-lime-300 pointer-events-none">
+          {debugText}
+        </pre>
       )}
 
       {showHint && qrAnchor && (

@@ -109,6 +109,8 @@ export class BarcodeScannerService {
   private nativeDetector: NativeDetector | null | undefined = undefined;
   private lastRegion: { x: number; y: number; w: number; h: number; t: number } | null = null;
   private fullResNext = false;
+  /** Which decoder found the last QR (shown in the diagnostics overlay). */
+  public lastMethod: 'Android' | 'ZXing' | '' = '';
 
   public async startCamera(videoElement: HTMLVideoElement): Promise<MediaStream> {
     this.stopCamera();
@@ -190,6 +192,7 @@ export class BarcodeScannerService {
         const codes = await detector.detect(videoElement);
         if (codes.length > 0) {
           const b = codes[0];
+          this.lastMethod = 'Android';
           return {
             text: b.rawValue,
             timestamp: capturedAt,
@@ -255,6 +258,7 @@ export class BarcodeScannerService {
       const side = Math.max(Math.max(...xs) - minX, Math.max(...ys) - minY);
 
       this.lastRegion = { x: minX, y: minY, w: side, h: side, t: capturedAt };
+      this.lastMethod = 'ZXing';
       this.fullResNext = false;
       return {
         text: result.getText(),

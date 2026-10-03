@@ -182,6 +182,12 @@ interface GyroSample {
  *   one that explains it; if none does, the gyroscope is not used at all.
  */
 export class GyroTracker {
+  // Preferred source: Android's fused rotation sensor via the app bridge (exact axes, no calibration)
+  private nativeQ: THREE.Quaternion | null = null;
+  private nativeTaken: THREE.Quaternion | null = null;
+  private nativeLast = 0;
+  private nativeHistory: Array<{ t: number; q: THREE.Quaternion }> = [];
+  // Fallback: WebView devicemotion with axis-mapping calibration
   private cumulative = GYRO_MAPPINGS.map(() => new THREE.Quaternion());
   private history: GyroSample[] = [];
   private lastTaken = GYRO_MAPPINGS.map(() => new THREE.Quaternion());
@@ -234,9 +240,40 @@ export class GyroTracker {
     window.removeEventListener('devicemotion', this.onMotion);
   }
 
-  /** Gyroscope present and its axis mapping agrees with the camera. */
+  /** Read the native rotation sensor (call once per frame). */
+  poll() {
+    const bridge = (window as unknown as { AndroidBridge?: { getRotationQuat?: () => string } }).AndroidBridge;
+    const raw = bridge?.getRotationQuat?.();
+    if (!raw) return;
+    const [w, x, y, z] = raw.split(',').map(Number);
+    if (![w, x, y, z].every(Number.isFinite)) return;
+    // Device axes → camera/screen axes (only differs when the screen is rotated to landscape)
+    const screenAngle = THREE.MathUtils.degToRad(screen.orientation?.angle ?? 0);
+    const q = new THREE.Quaternion(x, y, z, w)
+      .normalize()
+      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), screenAngle));
+    const now = performance.now();
+    this.nativeQ = q;
+    this.nativeLast = now;
+    if (!this.nativeTaken) this.nativeTaken = q.clone();
+    this.nativeHistory.push({ t: now, q });
+    while (this.nativeHistory.length > 0 && now - this.nativeHistory[0].t > 1500) this.nativeHistory.shift();
+  }
+
+  private get usingNative(): boolean {
+    return !!this.nativeQ && performance.now() - this.nativeLast < 500;
+  }
+
+  /** Gyroscope present and its axes are known to match the camera. */
   get active(): boolean {
-    return performance.now() - this.lastEvent < 500 && this.trusted;
+    return this.usingNative || (performance.now() - this.lastEvent < 500 && this.trusted);
+  }
+
+  /** Short status for the diagnostics overlay. */
+  status(): string {
+    if (this.usingNative) return 'sensor Android ✓';
+    if (performance.now() - this.lastEvent >= 500) return 'tidak ada';
+    return this.trusted ? `web ✓ (sumbu ${this.selected})` : `web: kalibrasi ${this.samples}`;
   }
 
   private sampleAt(t: number): GyroSample | null {
@@ -251,6 +288,11 @@ export class GyroTracker {
 
   /** Camera rotation since the previous call (null when the gyroscope is absent or untrusted). */
   take(): THREE.Quaternion | null {
+    if (this.usingNative) {
+      const delta = this.nativeTaken!.clone().invert().multiply(this.nativeQ!);
+      this.nativeTaken = this.nativeQ!.clone();
+      return delta;
+    }
     const i = this.selected;
     const delta = this.lastTaken[i].clone().invert().multiply(this.cumulative[i]);
     this.lastTaken = this.cumulative.map((q) => q.clone());
@@ -259,6 +301,11 @@ export class GyroTracker {
 
   /** Camera rotation between a past time (performance.now() clock) and now. */
   rotationSince(t: number): THREE.Quaternion | null {
+    if (this.usingNative) {
+      let best = this.nativeHistory[0];
+      for (const h of this.nativeHistory) if (Math.abs(h.t - t) < Math.abs(best.t - t)) best = h;
+      return best ? best.q.clone().invert().multiply(this.nativeQ!) : null;
+    }
     if (!this.active) return null;
     const s = this.sampleAt(t);
     if (!s) return null;
@@ -270,6 +317,7 @@ export class GyroTracker {
    * times. Each mapping predicts the second direction from the first; the best one is selected.
    */
   calibrate(dirA: THREE.Vector3, tA: number, dirB: THREE.Vector3, tB: number) {
+    if (this.usingNative) return; // native sensor axes are known, nothing to learn
     const sa = this.sampleAt(tA);
     const sb = this.sampleAt(tB);
     if (!sa || !sb || sa === sb) return;
