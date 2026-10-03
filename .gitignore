@@ -18,3 +18,5 @@ local.properties
 debug.keystore
 node_modules/
 web-app/.env
+web-app/.env.*.local
+web-app/.env.local
