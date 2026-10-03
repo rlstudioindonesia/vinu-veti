@@ -168,8 +168,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   /**
-   * Big models are compressed in the app (textures → WebP max 2048 px, Meshopt geometry), usually
-   * 5-15x smaller, so they upload past the 50 MB limit and download fast on kids' phones.
+   * Big models are compressed in the app (textures → WebP max 2048 px, Meshopt geometry) with a
+   * quality check on every texture, so they download fast on kids' phones and look the same.
    */
   const maybeCompress = async (f: PendingFile): Promise<PendingFile> => {
     if (!autoCompress || f.data.byteLength < COMPRESS_ABOVE) return f;
@@ -178,7 +178,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const { compressGlb } = await import('../../utils/glbCompress');
       const res = await compressGlb(f.data, (msg) => setCompressing(msg));
       if (res.after < res.before) {
-        showNotice(`Model dikompres: ${(res.before / 1048576).toFixed(1)} MB → ${(res.after / 1048576).toFixed(1)} MB`);
+        const kept = res.textures.filter((t) => t.to === 'unchanged').length;
+        showNotice(
+          `Model dikompres: ${(res.before / 1048576).toFixed(1)} MB → ${(res.after / 1048576).toFixed(1)} MB, kualitas terjaga` +
+            (kept > 0 ? ` (${kept} tekstur dibiarkan asli agar tidak turun kualitas)` : '')
+        );
         return { data: res.data, name: f.name };
       }
       return f;

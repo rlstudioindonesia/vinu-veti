@@ -63,18 +63,42 @@ Konfigurasi ini cukup sekali. Setelah aplikasi ada di Play Store, update konten 
 
 Batas upload Supabase gratis adalah 50 MB per file. Aplikasi menanganinya otomatis:
 
-1. **Kompres otomatis saat upload** (form admin, aktif secara default untuk file > 5 MB): tekstur diperkecil
-   ke maks. 2048 px dan diubah ke WebP, geometri/animasi dirapikan lalu dikompres Meshopt. Biasanya
-   5–15× lebih kecil dengan tampilan nyaris sama. Ukuran sebelum → sesudah ditampilkan.
+1. **Kompres otomatis saat upload** (form admin, aktif secara default untuk file > 5 MB), dengan
+   kualitas sebagai prioritas:
+   - Tekstur hanya diperkecil bila lebih besar dari 2048 px (layar HP tidak bisa menampilkan lebih, dan
+     tekstur 4096 px sering membuat HP murah kehabisan memori GPU), lalu diubah ke WebP.
+   - Setiap tekstur hasil kompres **dibandingkan piksel demi piksel** dengan aslinya (PSNR). Tekstur warna
+     harus ≥ 40 dB, peta material ≥ 44 dB, peta normal (yang mengatur pantulan cahaya) ≥ 50 dB. Bila
+     belum tercapai, dicoba kualitas lebih tinggi sampai WebP lossless; bila tetap tidak lebih kecil,
+     **tekstur asli dipakai apa adanya**.
+   - Tekstur transparan (rambut, daun, dll.) tidak pernah dikompres ulang agar tepinya tidak menghitam.
+   - Geometri dikuantisasi dengan presisi tinggi (posisi 16 bit, normal & UV 14 bit) lalu Meshopt.
+     Animasi hanya dibuang keyframe yang benar-benar berlebih (selisih < 0,0001).
+   - Uji pada 11 model contoh Khronos: render sebelum vs sesudah SSIM ≥ 0,99 (umumnya 0,998), tidak
+     terlihat bedanya oleh mata. Ukuran turun 1,1–4× (lebih besar lagi untuk tekstur 4096 px).
 2. **File yang masih > 45 MB dipecah** menjadi beberapa bagian saat publikasi, lalu disatukan kembali
-   di HP dan saat build APK. Jadi batas 50 MB tidak menghalangi.
+   di HP dan saat build APK. Memecah file **tidak mengubah satu bit pun**: setelah disatukan, isi file
+   dicek dengan SHA-256 terhadap indeks (`manifest.json`); file yang rusak/terpotong di jalan ditolak
+   dan diunduh ulang nanti.
 
 Tetap usahakan model sekecil mungkin (idealnya < 15 MB): file besar lama diunduh anak, memperbesar APK,
-dan memakan memori HP. Untuk hasil maksimal bisa juga dikompres di laptop:
+dan memakan memori HP. Cara paling efektif tanpa turun kualitas: saat ekspor dari Blender, pakai tekstur
+2048 px (bukan 4096/8192) dan hapus objek/animasi yang tidak dipakai. Kompres manual di laptop juga bisa:
 
 ```
-npx @gltf-transform/cli optimize model.glb model-kecil.glb --compress meshopt --texture-compress webp --texture-size 1024
+npx @gltf-transform/cli optimize model.glb model-kecil.glb --compress meshopt --texture-compress webp --texture-size 2048
 ```
+
+## Indeks & optimasi aplikasi
+
+- **Indeks konten**: `manifest.json` berisi daftar stiker + SHA-256 setiap file. File disimpan dengan nama
+  SHA-nya (`files/<sha>.glb`), jadi file yang tidak berubah tidak pernah diunggah/diunduh ulang.
+- **Di HP**: kode QR dicari lewat indeks (satu kali lookup per bacaan kamera). Model yang sudah pernah
+  dipindai disimpan sementara di memori (batas menyesuaikan RAM HP), jadi membuka halaman lagi langsung
+  muncul tanpa membaca & mendekode ulang.
+- Shader dan tekstur model disiapkan di GPU sebelum karakter muncul, agar animasi muncul tidak tersendat.
+- Kode aplikasi dipecah: layar awal hanya memuat ±290 KB; kode AR dimuat di latar belakang setelah layar
+  awal tampil, kode admin hanya saat admin dibuka.
 
 ## Kuota gratis Supabase (perkiraan)
 

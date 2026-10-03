@@ -280,7 +280,9 @@ export async function syncContentPack(
   for (const job of queue) {
     try {
       const data = await download(job.url, job.size);
-      const sha = job.sha || (await sha256Hex(data));
+      // Integrity check: the bytes (joined from parts for big files) must match the published index
+      const sha = await sha256Hex(data);
+      if (job.sha && sha !== job.sha) throw new Error(`File rusak saat diunduh (SHA tidak cocok): ${job.url}`);
       if (job.kind === 'model') await ARDatabase.saveAssetBlob(job.id, data, job.name, sha);
       else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha, job.lang);
       downloaded++;

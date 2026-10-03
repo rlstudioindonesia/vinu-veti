@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { ARQRTarget } from './types/arBook';
 import { ARDatabase, resolveAudioSource } from './services/db';
 import { syncContentPack } from './services/contentPack';
@@ -7,16 +7,23 @@ import { QRAnchor } from './services/barcodeScanner';
 import { soundService } from './services/soundService';
 import { SplashScreen } from './components/Splash/SplashScreen';
 import { WelcomeScreen } from './components/Portal/WelcomeScreen';
-import { AdminLoginModal } from './components/Auth/AdminLoginModal';
-import { CameraFeed } from './components/ARView/CameraFeed';
-import { ThreeCanvas } from './components/ARView/ThreeCanvas';
 import { ARScannerOverlay } from './components/ARView/ARScannerOverlay';
-import { QRStickerPrintModal } from './components/QRPrint/QRStickerPrintModal';
-import { AdminPanel } from './components/Admin/AdminPanel';
 import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 import { LanguagePicker } from './components/Portal/LanguagePicker';
 import type { ContentStatus } from './components/Portal/WelcomeScreen';
 import { loadSavedLang, useI18n } from './i18n';
+
+// Loaded on demand so the app starts fast: AR (three.js + QR scanner) is fetched in the background
+// right after the splash screen, the admin tools only when they are opened.
+const loadCameraFeed = () => import('./components/ARView/CameraFeed');
+const loadThreeCanvas = () => import('./components/ARView/ThreeCanvas');
+const CameraFeed = lazy(() => loadCameraFeed().then((m) => ({ default: m.CameraFeed })));
+const ThreeCanvas = lazy(() => loadThreeCanvas().then((m) => ({ default: m.ThreeCanvas })));
+const AdminPanel = lazy(() => import('./components/Admin/AdminPanel').then((m) => ({ default: m.AdminPanel })));
+const AdminLoginModal = lazy(() => import('./components/Auth/AdminLoginModal').then((m) => ({ default: m.AdminLoginModal })));
+const QRStickerPrintModal = lazy(() =>
+  import('./components/QRPrint/QRStickerPrintModal').then((m) => ({ default: m.QRStickerPrintModal }))
+);
 
 // The AR session for a sticker ends this long after the QR was last seen. While the camera moves the
 // scanner often misses the QR (motion blur); ThreeCanvas keeps the model on the sticker using the
@@ -44,8 +51,10 @@ export default function App() {
   const [activeTarget, setActiveTarget] = useState<ARQRTarget | null>(null);
   const [qrAnchor, setQrAnchor] = useState<QRAnchor | null>(null);
 
-  const targetsRef = useRef<ARQRTarget[]>([]);
-  targetsRef.current = targets;
+  // Index: normalised QR code → sticker, so each camera read is a single lookup
+  const targetsByCode = useMemo(() => new Map(targets.map((t) => [normalizeCode(t.qrCode), t])), [targets]);
+  const targetsByCodeRef = useRef(targetsByCode);
+  targetsByCodeRef.current = targetsByCode;
   const activeTargetRef = useRef<ARQRTarget | null>(null);
   activeTargetRef.current = activeTarget;
   const qrLossTimerRef = useRef<number | null>(null);
@@ -105,6 +114,16 @@ export default function App() {
     };
   }, [loadTargetsFromDB]);
 
+  // Fetch the AR code in the background once the home screen is up, so "Open camera" is instant
+  useEffect(() => {
+    if (isLoadingApp) return;
+    const id = window.setTimeout(() => {
+      loadCameraFeed().catch(() => undefined);
+      loadThreeCanvas().catch(() => undefined);
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [isLoadingApp]);
+
   const resetAR = useCallback(() => {
     if (qrLossTimerRef.current) window.clearTimeout(qrLossTimerRef.current);
     setActiveTarget(null);
@@ -114,7 +133,7 @@ export default function App() {
 
   const handleQRDetected = useCallback((code: string, anchor: QRAnchor) => {
     const clean = normalizeCode(code);
-    const matched = targetsRef.current.find((t) => normalizeCode(t.qrCode) === clean);
+    const matched = targetsByCodeRef.current.get(clean);
     if (!matched) return;
 
     if (activeTargetRef.current?.id !== matched.id) {
@@ -168,8 +187,10 @@ export default function App() {
 
       {!isLoadingApp && currentView === 'ar' && (
         <>
-          <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
-          <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} onModelShown={handleModelShown} />
+          <Suspense fallback={null}>
+            <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
+            <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} onModelShown={handleModelShown} />
+          </Suspense>
           <ARScannerOverlay
             activeTarget={qrAnchor ? activeTarget : null}
             onBackToHome={() => {
@@ -180,26 +201,30 @@ export default function App() {
         </>
       )}
 
-      {!isLoadingApp && currentView === 'admin' && (
-        <AdminPanel
-          targets={targets}
-          onRefreshTargets={loadTargetsFromDB}
-          onClose={() => setCurrentView('portal')}
-          onTestCamera={openCamera}
-          onOpenPrintModal={() => setIsPrintModalOpen(true)}
-        />
-      )}
+      <Suspense fallback={null}>
+        {!isLoadingApp && currentView === 'admin' && (
+          <AdminPanel
+            targets={targets}
+            onRefreshTargets={loadTargetsFromDB}
+            onClose={() => setCurrentView('portal')}
+            onTestCamera={openCamera}
+            onOpenPrintModal={() => setIsPrintModalOpen(true)}
+          />
+        )}
 
-      {isPrintModalOpen && <QRStickerPrintModal targets={targets} onClose={() => setIsPrintModalOpen(false)} />}
+        {isPrintModalOpen && <QRStickerPrintModal targets={targets} onClose={() => setIsPrintModalOpen(false)} />}
 
-      <AdminLoginModal
-        isOpen={isAdminLoginOpen}
-        onSuccess={() => {
-          setIsAdminLoginOpen(false);
-          setCurrentView('admin');
-        }}
-        onClose={() => setIsAdminLoginOpen(false)}
-      />
+        {isAdminLoginOpen && (
+          <AdminLoginModal
+            isOpen
+            onSuccess={() => {
+              setIsAdminLoginOpen(false);
+              setCurrentView('admin');
+            }}
+            onClose={() => setIsAdminLoginOpen(false)}
+          />
+        )}
+      </Suspense>
 
       <PrivacyPolicyModal isOpen={isPrivacyModalOpen} onClose={() => setIsPrivacyModalOpen(false)} />
 

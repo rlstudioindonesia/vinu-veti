@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 export interface LoadedGLBResult {
   scene: THREE.Group;
@@ -31,6 +32,88 @@ export async function loadGlbModel(source: string | ArrayBuffer | Blob): Promise
   const data = source instanceof Blob ? await source.arrayBuffer() : source;
   const gltf = await loader.parseAsync(data, '');
   return { scene: gltf.scene, animations: gltf.animations || [] };
+}
+
+// Parsed models stay in memory for a while: flipping back to a page shows its character instantly
+// (no reading from storage, no decoding). Each use gets its own copy that shares geometry and
+// textures. The oldest models are dropped when the estimated memory use passes the budget, which
+// follows the phone's RAM (2 GB phone ≈ 96 MB, 4 GB ≈ 192 MB, at most 256 MB).
+const DEVICE_GB = (navigator as Navigator & { deviceMemory?: number }).deviceMemory || 2;
+const CACHE_BUDGET = Math.min(256, Math.max(64, DEVICE_GB * 48)) * 1048576;
+const CACHE_MAX = 8;
+const modelCache = new Map<string, { result: Promise<LoadedGLBResult>; bytes: number }>();
+
+function estimateBytes(scene: THREE.Object3D): number {
+  const seen = new Set<unknown>();
+  let bytes = 0;
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (mesh.geometry && !seen.has(mesh.geometry)) {
+      seen.add(mesh.geometry);
+      const g = mesh.geometry;
+      Object.values(g.attributes).forEach((a) => (bytes += (a as THREE.BufferAttribute).array.byteLength));
+      if (g.index) bytes += g.index.array.byteLength;
+    }
+    const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+    for (const m of mats) {
+      for (const v of Object.values(m)) {
+        if (!(v instanceof THREE.Texture) || seen.has(v)) continue;
+        seen.add(v);
+        const img = v.image as { width?: number; height?: number } | undefined;
+        bytes += (img?.width || 0) * (img?.height || 0) * 4;
+      }
+    }
+  });
+  return bytes;
+}
+
+function trimCache(keep: string) {
+  let total = 0;
+  modelCache.forEach((e) => (total += e.bytes));
+  for (const [key, e] of modelCache) {
+    if (key === keep) continue;
+    if (total <= CACHE_BUDGET && modelCache.size <= CACHE_MAX) break;
+    modelCache.delete(key);
+    total -= e.bytes;
+  }
+}
+
+/**
+ * Like loadGlbModel, but remembers the parsed model under `key` (include a version so an updated
+ * file is loaded again). Returns a fresh copy for every call.
+ */
+export async function loadGlbCached(
+  key: string,
+  getSource: () => Promise<string | ArrayBuffer | Blob | null>
+): Promise<LoadedGLBResult> {
+  let entry = modelCache.get(key);
+  if (entry) {
+    modelCache.delete(key); // re-insert: most recently used last
+    modelCache.set(key, entry);
+  } else {
+    const result = (async () => {
+      const source = await getSource();
+      if (!source) throw new Error('missing');
+      return loadGlbModel(source);
+    })();
+    entry = { result, bytes: 0 };
+    modelCache.set(key, entry);
+    const e = entry;
+    result.then(
+      (r) => {
+        e.bytes = estimateBytes(r.scene);
+        trimCache(key);
+      },
+      () => modelCache.get(key) === e && modelCache.delete(key)
+    );
+  }
+  const { scene, animations } = await entry.result;
+  return { scene: cloneSkinned(scene) as THREE.Group, animations };
+}
+
+/** Forgets every cached model (e.g. after content was updated). */
+export function clearModelCache() {
+  modelCache.clear();
 }
 
 /**

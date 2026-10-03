@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries, resolveModelSource } from '../../services/db';
-import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
+import { loadGlbCached, normalizeModel } from '../../utils/modelLoader';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
 import { Hand, AlertTriangle } from 'lucide-react';
@@ -109,6 +109,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   const announcedRef = useRef<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const warmupRef = useRef<Array<{ pivot: THREE.Object3D; done: () => void }>>([]);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   // Anchor on the QR (pose set every frame); holds every animation variant of the character
@@ -318,6 +319,31 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
         return true;
       });
 
+      // GPU warm-up of newly loaded models (see prepareForGpu), in the same frame as the real render
+      if (warmupRef.current.length > 0) {
+        const holder = new THREE.Group();
+        holder.matrixAutoUpdate = false;
+        holder.matrix.makeTranslation(0, -0.5, -3).premultiply(camera.matrixWorld);
+        const jobs = warmupRef.current.splice(0);
+        jobs.forEach((j) => {
+          j.pivot.visible = true;
+          holder.add(j.pivot);
+        });
+        scene.add(holder);
+        const w = container.clientWidth || window.innerWidth;
+        const h = container.clientHeight || window.innerHeight;
+        renderer.setScissorTest(true);
+        renderer.setScissor(Math.floor(w / 2), Math.floor(h / 2), 1, 1);
+        renderer.render(scene, camera);
+        renderer.setScissorTest(false);
+        scene.remove(holder);
+        jobs.forEach((j) => {
+          holder.remove(j.pivot);
+          j.pivot.visible = false;
+          j.done();
+        });
+      }
+
       renderer.render(scene, camera);
     };
     animate();
@@ -326,6 +352,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       gravity.stop();
       gyro.stop();
       cancelAnimationFrame(frameId);
+      warmupRef.current.splice(0).forEach((j) => j.done());
       resizeObserver.disconnect();
       renderer.dispose();
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
@@ -350,6 +377,28 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       v.actions.forEach((a, i) => i !== step.clip && a.stop());
       v.actions[step.clip].reset().setLoop(THREE.LoopRepeat, Infinity).play();
     }
+  }, []);
+
+  const prepareForGpu = useCallback(async (pivot: THREE.Object3D) => {
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    const scene = sceneRef.current;
+    if (!renderer || !camera || !scene) return;
+    pivot.visible = true;
+    try {
+      await renderer.compileAsync(pivot, camera, scene);
+      pivot.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+        for (const m of mats) for (const v of Object.values(m)) if (v instanceof THREE.Texture) renderer.initTexture(v);
+      });
+      // Many phone GPU drivers only finish shaders/textures on the first real draw: the render loop
+      // draws the model once into a single, invisible pixel so that cost is paid before it appears
+      await new Promise<void>((done) => warmupRef.current.push({ pivot, done }));
+    } catch (err) {
+      console.warn('GPU warm-up skipped:', err);
+    }
+    pivot.visible = false;
   }, []);
 
   // Load every .glb of the sticker once (main first, extra animations in the background), so
@@ -408,16 +457,28 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       let mainScale: number | undefined;
       for (let i = 0; i < entries.length; i++) {
         try {
-          const source = await resolveModelSource(target, i);
-          if (!source) {
-            if (i === 0) throw new Error('missing');
-            continue;
+          let loaded;
+          try {
+            // Cached per file + version: scanning a page again shows its character instantly
+            loaded = await loadGlbCached(`${entries[i].id}|${target.updatedAt ?? ''}|${entries[i].url ?? ''}`, () =>
+              resolveModelSource(target, i)
+            );
+          } catch (err) {
+            if (i > 0 && err instanceof Error && err.message === 'missing') continue;
+            throw err;
           }
-          const { scene: gltfScene, animations } = await loadGlbModel(source);
           if (cancelled) return;
+          const { scene: gltfScene, animations } = loaded;
           // Same scale as the main model: the character keeps its size in every animation
           const { pivot, scale } = normalizeModel(gltfScene, mainScale);
           if (i === 0) mainScale = scale;
+          // Compile shaders and upload textures before the character pops in, so the appear
+          // animation (and the first tap on an extra animation) does not stutter
+          await prepareForGpu(pivot);
+          if (cancelled) {
+            disposeObject(pivot);
+            return;
+          }
           pivot.visible = false;
           const mixer = animations.length > 0 ? new THREE.AnimationMixer(gltfScene) : null;
           const actions = mixer ? animations.map((clip) => mixer.clipAction(clip)) : [];
@@ -446,7 +507,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     return () => {
       cancelled = true;
     };
-  }, [target, activateStep]);
+  }, [target, activateStep, prepareForGpu]);
 
   // Touching the character: next animation (next clip / next uploaded .glb of the same QR)
   // Only when the sticker has more than one animation; otherwise touching does nothing at all.
