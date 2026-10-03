@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { ARQRTarget } from './types/arBook';
 import { ARDatabase, getModelEntries, resolveAudioSource } from './services/db';
 import { syncContentPack } from './services/contentPack';
+import { getCloudUser } from './services/cloudPublish';
 import { QRAnchor } from './services/barcodeScanner';
 import { soundService } from './services/soundService';
 import { SplashScreen } from './components/Splash/SplashScreen';
@@ -17,9 +18,10 @@ import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 // The model stays visible this long after the QR was last seen (scanner misses some frames)
 const QR_LOST_TIMEOUT = 1200;
 
-// Admin tools (create stickers, print QR, export content packs) are left out of the Play Store build.
-// They are available in `npm run dev` and in `npm run build:admin` (VITE_ENABLE_ADMIN=true in .env.admin).
-const ADMIN_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_ADMIN === 'true';
+// Admin tools are in every build. In the Play Store build the entry is hidden (tap the "VINU & VETI"
+// badge 7 times) and protected by the Supabase admin account. `npm run dev` and `npm run build:admin`
+// also show a visible "Guru & Ortu" button.
+const SHOW_ADMIN_BUTTON = import.meta.env.DEV || import.meta.env.VITE_ENABLE_ADMIN === 'true';
 
 function normalizeCode(code: string) {
   return (code || '').trim().toLowerCase();
@@ -126,7 +128,7 @@ export default function App() {
   };
 
   const handleOpenAdmin = () => {
-    if (sessionStorage.getItem('ar_admin_auth') === 'true') {
+    if (getCloudUser() || sessionStorage.getItem('ar_admin_auth') === 'true') {
       setCurrentView('admin');
     } else {
       setIsAdminLoginOpen(true);
@@ -140,7 +142,8 @@ export default function App() {
       {!isLoadingApp && currentView === 'portal' && (
         <WelcomeScreen
           onStartCamera={openCamera}
-          onOpenAdmin={ADMIN_ENABLED ? handleOpenAdmin : undefined}
+          onOpenAdmin={handleOpenAdmin}
+          showAdminButton={SHOW_ADMIN_BUTTON}
           onOpenPrivacy={() => setIsPrivacyModalOpen(true)}
           hasContent={targets.length > 0}
         />
@@ -165,7 +168,7 @@ export default function App() {
         </>
       )}
 
-      {ADMIN_ENABLED && !isLoadingApp && currentView === 'admin' && (
+      {!isLoadingApp && currentView === 'admin' && (
         <AdminPanel
           targets={targets}
           onRefreshTargets={loadTargetsFromDB}
@@ -175,18 +178,16 @@ export default function App() {
         />
       )}
 
-      {ADMIN_ENABLED && isPrintModalOpen && <QRStickerPrintModal targets={targets} onClose={() => setIsPrintModalOpen(false)} />}
+      {isPrintModalOpen && <QRStickerPrintModal targets={targets} onClose={() => setIsPrintModalOpen(false)} />}
 
-      {ADMIN_ENABLED && (
-        <AdminLoginModal
-          isOpen={isAdminLoginOpen}
-          onSuccess={() => {
-            setIsAdminLoginOpen(false);
-            setCurrentView('admin');
-          }}
-          onClose={() => setIsAdminLoginOpen(false)}
-        />
-      )}
+      <AdminLoginModal
+        isOpen={isAdminLoginOpen}
+        onSuccess={() => {
+          setIsAdminLoginOpen(false);
+          setCurrentView('admin');
+        }}
+        onClose={() => setIsAdminLoginOpen(false)}
+      />
 
       <PrivacyPolicyModal isOpen={isPrivacyModalOpen} onClose={() => setIsPrivacyModalOpen(false)} />
     </div>
