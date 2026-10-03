@@ -18,6 +18,7 @@ export interface QRAnchor {
   // QR corners in video pixels, in the QR's own orientation: top-left, top-right, bottom-right, bottom-left
   cornerPoints?: Array<{ x: number; y: number }>;
   timestamp?: number; // when the frame was captured (ms)
+  mediaTime?: number; // video.currentTime of that frame: identifies the exact camera frame
 }
 
 export interface ScanResult {
@@ -178,12 +179,19 @@ export class BarcodeScannerService {
     return this.nativeDetector;
   }
 
+  /** Where the QR is now (from the frame-by-frame tracker): the next decode only looks there. */
+  public hintRegion(anchor: QRAnchor) {
+    const side = Math.max(anchor.width, anchor.height);
+    this.lastRegion = { x: anchor.x, y: anchor.y, w: side, h: side, t: Date.now() };
+  }
+
   public async scanOnce(videoElement: HTMLVideoElement): Promise<ScanResult | null> {
     if (!videoElement || videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return null;
     const vW = videoElement.videoWidth;
     const vH = videoElement.videoHeight;
     if (!vW || !vH) return null;
     const capturedAt = Date.now(); // frame time, used to predict motion between scans
+    const mediaTime = videoElement.currentTime;
 
     // 1. Native BarcodeDetector (fast, available in most Android WebViews)
     const detector = await this.getNativeDetector();
@@ -205,6 +213,7 @@ export class BarcodeScannerService {
               videoHeight: vH,
               cornerPoints: b.cornerPoints,
               timestamp: capturedAt,
+              mediaTime,
             },
           };
         }
@@ -272,6 +281,7 @@ export class BarcodeScannerService {
           videoHeight: vH,
           cornerPoints: corners,
           timestamp: capturedAt,
+          mediaTime,
         },
       };
     } catch {

@@ -62,12 +62,22 @@ export class QrPoseStabilizer {
   private flipCount = 0;
   private lastMeasurement = 0;
   private recentDist: number[] = [];
+  // Readings from the frame-by-frame optical tracker are precise and arrive every camera frame:
+  // they are followed closely (little smoothing = no lag); decoder readings are noisier
+  private precise = false;
+  // Sliding motion of the QR on screen that the gyroscope does not explain (the phone moving
+  // sideways), from consecutive tracker readings: used to make up for the processing delay
+  private lastMeasDir: THREE.Vector3 | null = null;
+  private lastMeasT = 0;
+  private slide = new THREE.Vector3(); // direction change per second (camera space)
 
   reset() {
     this.pos = null;
     this.shownPos = null;
     this.flipCount = 0;
     this.recentDist = [];
+    this.lastMeasDir = null;
+    this.slide.set(0, 0, 0);
   }
 
   /** Time since the last QR measurement (ms). */
@@ -83,13 +93,18 @@ export class QrPoseStabilizer {
     this.rot.premultiply(inv);
     this.shownPos?.applyQuaternion(inv);
     this.shownRot.premultiply(inv);
+    this.lastMeasDir?.applyQuaternion(inv);
+    this.slide.applyQuaternion(inv);
   }
 
   /**
    * Feed a new QR measurement. `areaNorm` is the area of the QR on screen in normalised camera units
    * (pixels² / focal²): distance from the apparent size is far steadier than from the pose itself.
+   * `precise`: the reading comes from the optical tracker (see qrTracker). `capturedAt`: when its
+   * camera frame was taken (same clock as `now`).
    */
-  addMeasurement(pose: THREE.Matrix4, now: number, areaNorm: number) {
+  addMeasurement(pose: THREE.Matrix4, now: number, areaNorm: number, precise = false, capturedAt = now) {
+    this.precise = precise;
     const p = new THREE.Vector3();
     const q = new THREE.Quaternion();
     pose.decompose(p, q, new THREE.Vector3());
@@ -105,11 +120,27 @@ export class QrPoseStabilizer {
       this.flipCount++; // probably a misread: keep the previous rotation
     } else {
       this.flipCount = 0;
-      this.rot.slerp(q, reacquire ? 0.6 : 0.1);
+      this.rot.slerp(q, reacquire ? 0.6 : precise ? 0.3 : 0.1);
     }
 
     // Distance from the apparent size: area ≈ cos(tilt) / distance² for a unit square
     const dir = p.clone().normalize();
+    // Make up for the time between the camera frame and now when the QR slides across the screen
+    // (rotation is already handled with the gyroscope): continue the recent sliding motion a bit
+    const dtCapture = capturedAt - this.lastMeasT;
+    if (precise && this.lastMeasDir && dtCapture > 5 && dtCapture < 150) {
+      const inst = dir.clone().sub(this.lastMeasDir).divideScalar(dtCapture / 1000);
+      this.slide.lerp(inst, 0.5);
+    } else {
+      this.slide.set(0, 0, 0);
+    }
+    this.lastMeasDir = precise ? dir.clone() : null;
+    this.lastMeasT = capturedAt;
+    const speed = this.slide.length();
+    if (precise && speed > 0.08) {
+      const ahead = Math.min(now - capturedAt + 16, 120) / 1000; // until the next screen refresh
+      dir.addScaledVector(this.slide, ahead * 0.8 * Math.min(1, (speed - 0.08) / 0.15)).normalize();
+    }
     const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(this.rot);
     const cosTilt = Math.max(0.25, Math.abs(normal.dot(dir)));
     const sizeDist = areaNorm > 0 ? Math.sqrt(cosTilt / areaNorm) : p.length();
@@ -126,12 +157,14 @@ export class QrPoseStabilizer {
     // Tiny shifts (a few px) are corner noise: follow them only slightly. Real moves: follow fast.
     const curDir = this.pos.clone().normalize();
     const shift = curDir.angleTo(dir); // radians; 0.001 ≈ 1 px at a typical focal length
-    const kDir = THREE.MathUtils.clamp((shift - 0.002) / 0.02, 0, 1) * 0.85 + 0.08;
+    const kDir = precise
+      ? THREE.MathUtils.clamp((shift - 0.0005) / 0.004, 0, 1) * 0.5 + 0.5
+      : THREE.MathUtils.clamp((shift - 0.002) / 0.02, 0, 1) * 0.85 + 0.08;
     const nextDir = curDir.lerp(dir, kDir).normalize();
     const ratio = median / dist;
     let nextDist = dist;
     if (Math.abs(ratio - 1) > 0.5) nextDist = median; // moved much closer/further: follow
-    else if (Math.abs(ratio - 1) > DISTANCE_DEADBAND) nextDist = dist + (median - dist) * 0.1;
+    else if (Math.abs(ratio - 1) > DISTANCE_DEADBAND) nextDist = dist + (median - dist) * (precise ? 0.25 : 0.1);
     this.pos.copy(nextDir.multiplyScalar(nextDist));
   }
 
@@ -142,8 +175,8 @@ export class QrPoseStabilizer {
       this.shownPos = this.pos.clone();
       this.shownRot.copy(this.rot);
     } else {
-      this.shownPos.lerp(this.pos, 1 - Math.exp(-dt / 0.06));
-      this.shownRot.slerp(this.rot, 1 - Math.exp(-dt / 0.15));
+      this.shownPos.lerp(this.pos, 1 - Math.exp(-dt / (this.precise ? 0.025 : 0.06)));
+      this.shownRot.slerp(this.rot, 1 - Math.exp(-dt / (this.precise ? 0.06 : 0.15)));
     }
     return new THREE.Matrix4().compose(this.shownPos, this.shownRot, new THREE.Vector3(1, 1, 1));
   }

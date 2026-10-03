@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
+import { qrTracker } from '../../services/qrTracker';
 import { RefreshCw, VideoOff } from 'lucide-react';
 import { useI18n } from '../../i18n';
 
@@ -10,6 +11,9 @@ interface CameraFeedProps {
 
 // Pause between scans (ms). A new scan only starts after the previous one finished.
 const SCAN_INTERVAL = 30;
+// While the tracker follows the QR every frame, decoding is only needed now and then (to confirm
+// the QR and correct drift); fewer decodes leave the phone's CPU free for smooth tracking.
+const SCAN_INTERVAL_TRACKING = 250;
 
 export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, videoRef }) => {
   const { t } = useI18n();
@@ -46,26 +50,36 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
     let stopped = false;
     let timer: number | undefined;
 
+    const video = videoRef.current;
+    if (video) qrTracker.start(video);
+
     const loop = async () => {
       if (stopped) return;
       const video = videoRef.current;
       if (video) {
         try {
+          const tracked = qrTracker.isTracking() ? qrTracker.latest : null;
+          if (tracked) barcodeScanner.hintRegion(tracked.anchor);
           const result = await barcodeScanner.scanOnce(video);
           if (!stopped && result && result.text.trim()) {
+            qrTracker.seed(result.text, result.anchor);
             onDetectedRef.current(result.text, result.anchor);
+          } else if (!stopped && tracked && qrTracker.isTracking(tracked.text)) {
+            // Not decoded (e.g. motion blur) but still followed by the tracker: the QR is still there
+            onDetectedRef.current(tracked.text, qrTracker.latest!.anchor);
           }
         } catch {
           // skip frame
         }
       }
-      if (!stopped) timer = window.setTimeout(loop, SCAN_INTERVAL);
+      if (!stopped) timer = window.setTimeout(loop, qrTracker.isTracking() ? SCAN_INTERVAL_TRACKING : SCAN_INTERVAL);
     };
     loop();
 
     return () => {
       stopped = true;
       if (timer) window.clearTimeout(timer);
+      qrTracker.stop();
     };
   }, [cameraError, isLoading, videoRef]);
 
