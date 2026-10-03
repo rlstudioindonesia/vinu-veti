@@ -87,6 +87,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
   // Jitter filtering of the tracked QR + real-world "up" from the accelerometer
   const stabilizerRef = useRef(new QrPoseStabilizer());
   const lastAnchorRef = useRef<QRAnchor | null>(null);
+  // Previous QR reading (centre direction + capture time), to calibrate the gyroscope
+  const lastReadingRef = useRef<{ dir: THREE.Vector3; t: number } | null>(null);
 
   // Touch interaction
   const yawRef = useRef<number>(0);
@@ -163,6 +165,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
           model.visible = false;
           stabilizerRef.current.reset();
           lastAnchorRef.current = null;
+          lastReadingRef.current = null;
           gyro.take(); // drop rotation accumulated while nothing was tracked
         } else {
           const cw = container.clientWidth || window.innerWidth;
@@ -185,7 +188,19 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor }) =>
             lastAnchorRef.current = anchor;
             const raw = (anchor.cornerPoints?.length === 4 ? anchor.cornerPoints : boxCorners(anchor)).map(map);
             const measured = qrPoseFromCorners(raw, focal, cw / 2, ch / 2);
-            if (measured) stab.addMeasurement(measured, now, quadArea(raw) / (focal * focal));
+            if (measured) {
+              // The reading describes the frame captured a moment ago (scan latency)
+              const capturedAt = anchor.timestamp ? now - (Date.now() - anchor.timestamp) : now;
+              const dir = new THREE.Vector3().setFromMatrixPosition(measured).normalize();
+              const prev = lastReadingRef.current;
+              if (prev && capturedAt - prev.t < 400) gyro.calibrate(prev.dir, prev.t, dir, capturedAt);
+              lastReadingRef.current = { dir, t: capturedAt };
+              // Bring it forward to "now" with the phone's rotation since that frame, so the model does
+              // not trail behind the QR while the phone is shaken
+              const since = gyro.rotationSince(capturedAt);
+              if (since) measured.premultiply(new THREE.Matrix4().makeRotationFromQuaternion(since.invert()));
+              stab.addMeasurement(measured, now, quadArea(raw) / (focal * focal));
+            }
           }
           // QR briefly not detected (motion blur): with a gyroscope the model stays put on the sticker;
           // without one, hide it soon so it does not float in the wrong place
