@@ -5,7 +5,6 @@ import { exportContentPack, importContentPack, saveFileToDevice } from '../../se
 import { soundService } from '../../services/soundService';
 import { GlbViewerPreview } from './GlbViewerPreview';
 import { CloudPublishCard } from './CloudPublishCard';
-import { VinuVetiLogo } from '../Common/VinuVetiLogo';
 import {
   Plus,
   Trash2,
@@ -336,7 +335,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         <div className="flex items-center justify-between gap-3 pt-1 border-t border-slate-800/80">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-7 h-7 shrink-0">
-              <VinuVetiLogo className="w-full h-full" showGlow={false} />
+              <img src="./app-icon.png" alt="" className="w-full h-full rounded-lg" />
             </div>
             <h2 className="font-bold text-sm sm:text-base text-white tracking-wide truncate">Kelola Stiker & Model 3D</h2>
           </div>
