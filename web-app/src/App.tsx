@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ARQRTarget } from './types/arBook';
-import { ARDatabase } from './services/db';
-import { realtimeSync } from './services/realtimeSync';
+import { ARDatabase, getModelEntries, resolveAudioSource } from './services/db';
+import { syncContentPack } from './services/contentPack';
 import { QRAnchor } from './services/barcodeScanner';
 import { soundService } from './services/soundService';
 import { SplashScreen } from './components/Splash/SplashScreen';
@@ -14,6 +14,13 @@ import { QRStickerPrintModal } from './components/QRPrint/QRStickerPrintModal';
 import { AdminPanel } from './components/Admin/AdminPanel';
 import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 
+// The model stays visible this long after the QR was last seen (scanner misses some frames)
+const QR_LOST_TIMEOUT = 1200;
+
+function normalizeCode(code: string) {
+  return (code || '').trim().toLowerCase();
+}
+
 export default function App() {
   const [isLoadingApp, setIsLoadingApp] = useState<boolean>(true);
   const [currentView, setCurrentView] = useState<'portal' | 'ar' | 'admin'>('portal');
@@ -21,107 +28,82 @@ export default function App() {
   const [activeTarget, setActiveTarget] = useState<ARQRTarget | null>(null);
   const [qrAnchor, setQrAnchor] = useState<QRAnchor | null>(null);
   const [activeAssetIndex, setActiveAssetIndex] = useState<number>(0);
-  const qrLossTimerRef = useRef<number | null>(null);
 
-  // Modals
+  const targetsRef = useRef<ARQRTarget[]>([]);
+  targetsRef.current = targets;
+  const activeTargetRef = useRef<ARQRTarget | null>(null);
+  activeTargetRef.current = activeTarget;
+  const qrLossTimerRef = useRef<number | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
   const [isAdminLoginOpen, setIsAdminLoginOpen] = useState<boolean>(false);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState<boolean>(false);
 
-  // Load targets from IndexedDB / LocalStorage
   const loadTargetsFromDB = useCallback(async () => {
     try {
       await ARDatabase.init();
-      const all = await ARDatabase.getAllTargets();
-      setTargets(all);
+      setTargets(await ARDatabase.getAllTargets());
     } catch (e) {
       console.warn('DB load notice:', e);
     }
   }, []);
 
   useEffect(() => {
-    loadTargetsFromDB();
-
-    // Real-time synchronization listener across tabs
-    const unsubscribeSync = realtimeSync.subscribe(async () => {
-      const fresh = await ARDatabase.getAllTargets();
-      setTargets(fresh);
-      setActiveTarget((prev) => {
-        if (!prev) return null;
-        return fresh.find((t) => t.id === prev.id) || prev;
-      });
-    });
-
-    return () => {
-      unsubscribeSync();
-    };
+    (async () => {
+      await loadTargetsFromDB();
+      // Install bundled content and, when online, mirror newer online content for offline use
+      try {
+        if (await syncContentPack()) await loadTargetsFromDB();
+      } catch (e) {
+        console.warn('Content sync notice:', e);
+      }
+    })();
   }, [loadTargetsFromDB]);
 
-  // Handle QR Scan from Real Camera Feed
-  const handleQRDetected = useCallback(
-    async (code: string, anchor?: QRAnchor) => {
-      if (!code || !code.trim() || !anchor) return;
-      const matched = await ARDatabase.findTargetByBarcode(code);
-      if (matched) {
-        setQrAnchor(anchor);
-        if (!activeTarget || activeTarget.id !== matched.id) {
-          soundService.playScanBeep();
-          setActiveAssetIndex(0);
-          // Auto-play manual audio if uploaded
-          if (matched.hasCustomAudio && matched.autoPlayAudio !== false) {
-            ARDatabase.getAudioBlob(matched.id).then((blob) => {
-              if (blob) {
-                soundService.playManualAudio(blob);
-              }
-            });
-          }
-        }
-        setActiveTarget(matched);
-
-        // Reset QR loss timer (if QR leaves camera frame, clear after 1.6s)
-        if (qrLossTimerRef.current) {
-          window.clearTimeout(qrLossTimerRef.current);
-        }
-        qrLossTimerRef.current = window.setTimeout(() => {
-          setQrAnchor(null);
-          setActiveTarget(null);
-        }, 1600);
-      }
-    },
-    [activeTarget]
-  );
-
-  // Cycle to next asset when touching 3D model
-  const handleCycleNextAsset = () => {
-    if (!activeTarget?.assets || activeTarget.assets.length <= 1) return;
-    setActiveAssetIndex((prev) => (prev + 1) % activeTarget.assets!.length);
-  };
-
-  // Preview AR from admin / print sheet
-  const handleProjectTargetDirectly = (target: ARQRTarget) => {
-    setQrAnchor({
-      x: 440,
-      y: 260,
-      width: 400,
-      height: 400,
-      videoWidth: 1280,
-      videoHeight: 720,
-    });
-    setActiveTarget(target);
+  const resetAR = useCallback(() => {
+    if (qrLossTimerRef.current) window.clearTimeout(qrLossTimerRef.current);
+    setActiveTarget(null);
+    setQrAnchor(null);
     setActiveAssetIndex(0);
-    soundService.playScanBeep();
-    if (target.hasCustomAudio && target.autoPlayAudio !== false) {
-      ARDatabase.getAudioBlob(target.id).then((blob) => {
-        if (blob) {
-          soundService.playManualAudio(blob);
-        }
-      });
+    soundService.stopAudio();
+  }, []);
+
+  const handleQRDetected = useCallback((code: string, anchor: QRAnchor) => {
+    const clean = normalizeCode(code);
+    const matched = targetsRef.current.find((t) => normalizeCode(t.qrCode) === clean);
+    if (!matched) return;
+
+    if (activeTargetRef.current?.id !== matched.id) {
+      soundService.playScanBeep();
+      setActiveAssetIndex(0);
+      setActiveTarget(matched);
+      if (matched.autoPlayAudio !== false) {
+        resolveAudioSource(matched).then((src) => {
+          if (src && activeTargetRef.current?.id === matched.id) soundService.playManualAudio(src);
+        });
+      }
     }
+    setQrAnchor(anchor);
+
+    if (qrLossTimerRef.current) window.clearTimeout(qrLossTimerRef.current);
+    qrLossTimerRef.current = window.setTimeout(() => setQrAnchor(null), QR_LOST_TIMEOUT);
+  }, []);
+
+  const handleCycleNextAsset = useCallback(() => {
+    const t = activeTargetRef.current;
+    if (!t) return;
+    const count = getModelEntries(t).length;
+    if (count > 1) setActiveAssetIndex((prev) => (prev + 1) % count);
+  }, []);
+
+  const openCamera = () => {
+    resetAR();
+    setCurrentView('ar');
   };
 
   const handleOpenAdmin = () => {
-    const isAuth = sessionStorage.getItem('ar_admin_auth') === 'true';
-    if (isAuth) {
+    if (sessionStorage.getItem('ar_admin_auth') === 'true') {
       setCurrentView('admin');
     } else {
       setIsAdminLoginOpen(true);
@@ -130,37 +112,20 @@ export default function App() {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-black select-none font-sans">
-      {/* 1. Initial Loading Screen */}
-      {isLoadingApp && (
-        <SplashScreen onLoaded={() => setIsLoadingApp(false)} />
-      )}
+      {isLoadingApp && <SplashScreen onLoaded={() => setIsLoadingApp(false)} />}
 
-      {/* 2. Simple Home Screen (Mulai Kamera, Admin & Privasi) */}
       {!isLoadingApp && currentView === 'portal' && (
         <WelcomeScreen
-          onStartCamera={() => {
-            setActiveTarget(null);
-            setQrAnchor(null);
-            setCurrentView('ar');
-          }}
+          onStartCamera={openCamera}
           onOpenAdmin={handleOpenAdmin}
           onOpenPrivacy={() => setIsPrivacyModalOpen(true)}
-          targets={targets}
-          onPreviewTarget={(t) => {
-            handleProjectTargetDirectly(t);
-            setCurrentView('ar');
-          }}
+          hasContent={targets.length > 0}
         />
       )}
 
-      {/* 3. Real-World Camera Stream (Active in AR mode) */}
       {!isLoadingApp && currentView === 'ar' && (
         <>
-          <CameraFeed
-            onBarcodeDetected={handleQRDetected}
-            facingMode="environment"
-            isScanningActive={true}
-          />
+          <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
           <ThreeCanvas
             target={activeTarget}
             qrAnchor={qrAnchor}
@@ -168,49 +133,27 @@ export default function App() {
             activeAssetIndex={activeAssetIndex}
           />
           <ARScannerOverlay
-            activeTarget={activeTarget}
+            activeTarget={qrAnchor ? activeTarget : null}
             onBackToHome={() => {
-              setActiveTarget(null);
-              setQrAnchor(null);
-              soundService.stopAudio();
+              resetAR();
               setCurrentView('portal');
             }}
           />
         </>
       )}
 
-      {/* 4. Admin Panel */}
       {!isLoadingApp && currentView === 'admin' && (
         <AdminPanel
           targets={targets}
           onRefreshTargets={loadTargetsFromDB}
           onClose={() => setCurrentView('portal')}
-          onPreviewAR={(t) => {
-            handleProjectTargetDirectly(t);
-            setCurrentView('ar');
-          }}
+          onTestCamera={openCamera}
           onOpenPrintModal={() => setIsPrintModalOpen(true)}
-          onOpenPrivacy={() => setIsPrivacyModalOpen(true)}
         />
       )}
 
-      {/* 5. Print QR Stickers Modal */}
-      {isPrintModalOpen && (
-        <QRStickerPrintModal
-          targets={targets}
-          onSelectTargetForAR={(t) => {
-            setIsPrintModalOpen(false);
-            handleProjectTargetDirectly(t);
-            setCurrentView('ar');
-          }}
-          onOpenCreate={() => {
-            setIsPrintModalOpen(false);
-          }}
-          onClose={() => setIsPrintModalOpen(false)}
-        />
-      )}
+      {isPrintModalOpen && <QRStickerPrintModal targets={targets} onClose={() => setIsPrintModalOpen(false)} />}
 
-      {/* 6. Admin Authentication Login Modal */}
       <AdminLoginModal
         isOpen={isAdminLoginOpen}
         onSuccess={() => {
@@ -220,11 +163,7 @@ export default function App() {
         onClose={() => setIsAdminLoginOpen(false)}
       />
 
-      {/* 7. Privacy Policy Modal */}
-      <PrivacyPolicyModal
-        isOpen={isPrivacyModalOpen}
-        onClose={() => setIsPrivacyModalOpen(false)}
-      />
+      <PrivacyPolicyModal isOpen={isPrivacyModalOpen} onClose={() => setIsPrivacyModalOpen(false)} />
     </div>
   );
 }

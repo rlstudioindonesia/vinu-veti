@@ -9,6 +9,13 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.print.PrintAttributes
+import android.print.PrintManager
+import android.provider.MediaStore
+import android.content.ContentValues
+import android.graphics.Bitmap
+import java.io.OutputStream
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -88,7 +95,14 @@ import java.io.File
  * - Permanent: Never wiped by browser cache limits or Android low-memory garbage collection
  * - High-speed direct streaming to Three.js GLTFLoader via WebViewAssetLoader InternalStoragePathHandler
  */
-class NativeStorageBridge(private val context: Context) {
+class NativeStorageBridge(
+  private val context: Context,
+  private val webViewProvider: () -> WebView?
+) {
+  private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+  private var downloadStream: OutputStream? = null
+  private var downloadLocation: String = ""
+
   private val modelsDir = File(context.filesDir, "ar_models").apply { mkdirs() }
   private val audioDir = File(context.filesDir, "ar_audio").apply { mkdirs() }
 
@@ -142,6 +156,77 @@ class NativeStorageBridge(private val context: Context) {
       File(audioDir, "$targetId.mp3").delete()
     } catch (e: Exception) {
       e.printStackTrace()
+    }
+  }
+
+  /** Opens the Android print dialog for the current page (printer or "Save as PDF"). */
+  @JavascriptInterface
+  fun printPage() {
+    mainHandler.post {
+      val webView = webViewProvider() ?: return@post
+      val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager ?: return@post
+      val adapter = webView.createPrintDocumentAdapter("Stiker QR Vinu Veti")
+      printManager.print(
+        "Stiker QR Vinu Veti",
+        adapter,
+        PrintAttributes.Builder().setMediaSize(PrintAttributes.MediaSize.ISO_A4).build()
+      )
+    }
+  }
+
+  /** Chunked file save into the public Downloads folder (QR images, content pack ZIP). */
+  @JavascriptInterface
+  fun beginDownload(fileName: String, mimeType: String): Boolean {
+    return try {
+      downloadStream?.close()
+      val safeName = fileName.replace(Regex("[^A-Za-z0-9._-]"), "_")
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val values = ContentValues().apply {
+          put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+          put(MediaStore.Downloads.MIME_TYPE, mimeType)
+          put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/VinuVeti")
+        }
+        val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+          ?: return false
+        downloadStream = context.contentResolver.openOutputStream(uri)
+        downloadLocation = "Download/VinuVeti/$safeName"
+      } else {
+        val dir = (context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir).apply { mkdirs() }
+        val file = File(dir, safeName)
+        downloadStream = file.outputStream()
+        downloadLocation = file.absolutePath
+      }
+      downloadStream != null
+    } catch (e: Exception) {
+      e.printStackTrace()
+      downloadStream = null
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun appendDownloadChunk(base64Data: String): Boolean {
+    return try {
+      val stream = downloadStream ?: return false
+      stream.write(Base64.decode(base64Data, Base64.DEFAULT))
+      true
+    } catch (e: Exception) {
+      e.printStackTrace()
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun finishDownload(): String {
+    return try {
+      downloadStream?.flush()
+      downloadStream?.close()
+      downloadStream = null
+      downloadLocation
+    } catch (e: Exception) {
+      e.printStackTrace()
+      downloadStream = null
+      ""
     }
   }
 
@@ -232,9 +317,10 @@ fun ARBookScreen(
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
       hasCameraPermission = isGranted
       if (isGranted) {
-        pendingPermissionRequest?.grant(pendingPermissionRequest?.resources)
+        pendingPermissionRequest?.let { req ->
+          req.grant(req.resources.filter { it == PermissionRequest.RESOURCE_VIDEO_CAPTURE }.toTypedArray())
+        }
         pendingPermissionRequest = null
-        webViewRef?.reload()
       } else {
         pendingPermissionRequest?.deny()
         pendingPermissionRequest = null
@@ -301,13 +387,18 @@ fun ARBookScreen(
               loadWithOverviewMode = true
               useWideViewPort = true
               cacheMode = WebSettings.LOAD_DEFAULT
-              mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+              mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             }
 
             // Expose Native Android Bridge to JavaScript
-            addJavascriptInterface(NativeStorageBridge(ctx), "AndroidBridge")
+            val self = this
+            addJavascriptInterface(NativeStorageBridge(ctx) { self }, "AndroidBridge")
 
             webChromeClient = object : WebChromeClient() {
+              // Without this, a <video> without frames shows WebView's grey "play" poster
+              override fun getDefaultVideoPoster(): Bitmap =
+                Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+
               override fun onPermissionRequest(request: PermissionRequest) {
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                   val resourcesToGrant = mutableListOf<String>()
@@ -316,19 +407,16 @@ fun ARBookScreen(
                       if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                         resourcesToGrant.add(res)
                       }
-                    } else if (res == PermissionRequest.RESOURCE_AUDIO_CAPTURE) {
-                      if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                        resourcesToGrant.add(res)
-                      }
-                    } else {
-                      resourcesToGrant.add(res)
                     }
                   }
                   if (resourcesToGrant.isNotEmpty()) {
                     request.grant(resourcesToGrant.toTypedArray())
-                  } else {
+                  } else if (request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
+                    pendingPermissionRequest?.deny()
                     pendingPermissionRequest = request
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                  } else {
+                    request.deny()
                   }
                 }
               }
@@ -489,7 +577,7 @@ fun ARBookScreen(
           )
           Spacer(modifier = Modifier.height(12.dp))
           Text(
-            text = "Memuat AR Book Explorer...",
+            text = "Memuat Vinu Veti...",
             style = MaterialTheme.typography.bodySmall.copy(
               color = Color(0xFF94A3B8)
             )

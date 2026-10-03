@@ -21,3 +21,50 @@ html, body, #root {
   --sal: env(safe-area-inset-left, 0px);
   --sar: env(safe-area-inset-right, 0px);
 }
+
+/* QR sticker print sheet (see QRStickerPrintModal) */
+.print-sheet {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+  html, body {
+    position: static !important;
+    overflow: visible !important;
+    height: auto !important;
+    background: #fff !important;
+  }
+  #root {
+    display: none !important;
+  }
+  .print-sheet {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8mm;
+    color: #000;
+    font-family: sans-serif;
+  }
+  .print-item {
+    border: 1px dashed #999;
+    padding: 4mm;
+    text-align: center;
+    break-inside: avoid;
+  }
+  .print-item img {
+    width: 45mm;
+    height: 45mm;
+  }
+  .print-label {
+    font-size: 10pt;
+    font-weight: bold;
+    margin-top: 2mm;
+  }
+  .print-code {
+    font-family: monospace;
+    font-size: 9pt;
+  }
+}
