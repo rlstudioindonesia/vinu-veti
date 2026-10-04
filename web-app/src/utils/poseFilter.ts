@@ -221,6 +221,24 @@ const GYRO_MAPPINGS: Array<(a: number, b: number, g: number) => [number, number,
 
 const GYRO_MAPPING_KEY = 'vv_gyro_mapping';
 
+// Smoothing of the Android rotation sensor: time constant while still / while turning, and the
+// turning speeds (rad/s) between which it changes over (~6°/s … ~34°/s)
+const NATIVE_STILL_TAU = 0.12;
+const NATIVE_MOVING_TAU = 0.004;
+const NATIVE_STILL_SPEED = 0.1;
+const NATIVE_MOVING_SPEED = 0.6;
+
+/**
+ * Leaves out rotations too small to be real hand movement (remaining sensor noise): below `from`
+ * radians nothing, above `from + width` everything, smoothly in between. Slow real turns are still
+ * followed by the camera tracking; the gyroscope is there for fast movement.
+ */
+function softDeadband(q: THREE.Quaternion, from: number, width: number): THREE.Quaternion {
+  const angle = 2 * Math.acos(Math.min(1, Math.abs(q.w)));
+  const k = THREE.MathUtils.clamp((angle - from) / width, 0, 1);
+  return k >= 1 ? q : new THREE.Quaternion().slerp(q, k);
+}
+
 interface GyroSample {
   t: number;
   q: THREE.Quaternion[]; // cumulative camera orientation per mapping
@@ -309,6 +327,15 @@ export class GyroTracker {
       .normalize()
       .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), screenAngle));
     const now = performance.now();
+    // The sensor's small noise would move the model every frame (tremor): smooth it strongly while
+    // the phone is (almost) still, and hardly at all while it really turns (no lag)
+    if (this.nativeQ) {
+      const dt = Math.max(0.001, (now - this.nativeLast) / 1000);
+      const speed = this.nativeQ.angleTo(q) / dt; // rad/s
+      const k = THREE.MathUtils.clamp((speed - NATIVE_STILL_SPEED) / (NATIVE_MOVING_SPEED - NATIVE_STILL_SPEED), 0, 1);
+      const tau = NATIVE_STILL_TAU + (NATIVE_MOVING_TAU - NATIVE_STILL_TAU) * k;
+      q.copy(this.nativeQ.clone().slerp(q, 1 - Math.exp(-dt / tau)));
+    }
     this.nativeQ = q;
     this.nativeLast = now;
     if (!this.nativeTaken) this.nativeTaken = q.clone();
@@ -347,7 +374,7 @@ export class GyroTracker {
     if (this.usingNative) {
       const delta = this.nativeTaken!.clone().invert().multiply(this.nativeQ!);
       this.nativeTaken = this.nativeQ!.clone();
-      return delta;
+      return softDeadband(delta, 0.0004, 0.0008); // ~0.02°…0.07° per frame
     }
     const i = this.selected;
     const delta = this.lastTaken[i].clone().invert().multiply(this.cumulative[i]);
@@ -360,7 +387,7 @@ export class GyroTracker {
     if (this.usingNative) {
       let best = this.nativeHistory[0];
       for (const h of this.nativeHistory) if (Math.abs(h.t - t) < Math.abs(best.t - t)) best = h;
-      return best ? best.q.clone().invert().multiply(this.nativeQ!) : null;
+      return best ? softDeadband(best.q.clone().invert().multiply(this.nativeQ!), 0.001, 0.002) : null;
     }
     if (!this.active) return null;
     const s = this.sampleAt(t);

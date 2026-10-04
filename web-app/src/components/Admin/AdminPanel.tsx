@@ -6,6 +6,7 @@ import { exportContentPack, importContentPack, saveFileToDevice } from '../../se
 import { soundService } from '../../services/soundService';
 import { GlbViewerPreview } from './GlbViewerPreview';
 import { CloudPublishCard } from './CloudPublishCard';
+import { sha256Hex } from '../../services/cloudConfig';
 import {
   Plus,
   Trash2,
@@ -54,6 +55,35 @@ const COMPRESS_ABOVE = 5 * 1024 * 1024;
 
 const GLB_ACCEPT = '.glb,model/gltf-binary,application/octet-stream';
 
+const DeletePasswordField: React.FC<{ value: string; error: string | null; onChange: (v: string) => void; onEnter: () => void }> = ({
+  value,
+  error,
+  onChange,
+  onEnter,
+}) => (
+  <div className="mb-4 text-left">
+    <label className="text-[11px] font-semibold text-slate-300">Kata sandi hapus</label>
+    <input
+      type="password"
+      autoFocus
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => e.key === 'Enter' && onEnter()}
+      className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-hidden focus:border-rose-500"
+    />
+    {error && <p className="mt-1 text-[11px] font-semibold text-rose-400">{error}</p>}
+  </div>
+);
+
+// Deleting a sticker, an animation or a voice asks for the delete password. Only its SHA-256 is in
+// the app; it is a guard against deleting by accident, not a security boundary (that is the
+// Supabase login for publishing).
+const DELETE_PASSWORD_SHA256 = '4176a9032c2792c09bf2964cc5012878bba2293bdef7d3fb4c2c0f93742f2768';
+
+async function checkDeletePassword(pw: string): Promise<boolean> {
+  return (await sha256Hex(new TextEncoder().encode(pw.trim()))) === DELETE_PASSWORD_SHA256;
+}
+
 export const AdminPanel: React.FC<AdminPanelProps> = ({
   targets,
   onRefreshTargets,
@@ -68,6 +98,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState<boolean>(false);
   const [deleteTarget, setDeleteTarget] = useState<ARQRTarget | null>(null);
+  // Password prompt before deleting an animation or a voice
+  const [pwPrompt, setPwPrompt] = useState<{ title: string; run: () => void } | null>(null);
+  const [deletePw, setDeletePw] = useState<string>('');
+  const [deletePwError, setDeletePwError] = useState<string | null>(null);
 
   // Files picked in the form; written to storage only when the sticker is saved
   const [pendingMain, setPendingMain] = useState<PendingFile | null>(null);
@@ -232,6 +266,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditingTarget({ ...editingTarget, assets: list });
   };
 
+  const handleExtraAssetScale = (assetId: string, scale: number) => {
+    if (!editingTarget) return;
+    setEditingTarget({
+      ...editingTarget,
+      assets: (editingTarget.assets || []).map((a) => (a.id === assetId ? { ...a, scale } : a)),
+    });
+  };
+
+  const askDeletePassword = (title: string, run: () => void) => {
+    setDeletePw('');
+    setDeletePwError(null);
+    setPwPrompt({ title, run });
+  };
+
+  const confirmPwPrompt = async () => {
+    if (!pwPrompt) return;
+    if (!(await checkDeletePassword(deletePw))) {
+      setDeletePwError('Kata sandi hapus salah.');
+      return;
+    }
+    pwPrompt.run();
+    setPwPrompt(null);
+    setDeletePw('');
+  };
+
   const handleRemoveExtraAsset = (assetId: string) => {
     if (!editingTarget) return;
     const rest = { ...pendingExtras };
@@ -343,6 +402,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
+    if (!(await checkDeletePassword(deletePw))) {
+      setDeletePwError('Kata sandi hapus salah.');
+      return;
+    }
+    setDeletePw('');
+    setDeletePwError(null);
     await ARDatabase.deleteTarget(deleteTarget);
     await onRefreshTargets();
     setDeleteTarget(null);
@@ -503,7 +568,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <Edit className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => setDeleteTarget(t)}
+                      onClick={() => {
+                        setDeletePw('');
+                        setDeletePwError(null);
+                        setDeleteTarget(t);
+                      }}
                       className="p-1.5 rounded-xl bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400"
                       title="Hapus"
                     >
@@ -686,10 +755,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   {editingTarget.assets && editingTarget.assets.length > 0 ? (
                     <div className="space-y-1.5">
                       {editingTarget.assets.map((asset, i) => (
-                        <div key={asset.id} className="flex items-center justify-between bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
-                          <span className="truncate text-slate-300">
-                            Gerakan {i + 2}: <strong>{asset.fileName}</strong>
-                          </span>
+                        <div key={asset.id} className="flex items-center justify-between gap-2 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
+                          <div className="min-w-0 flex-1">
+                            <span className="block truncate text-slate-300">
+                              Gerakan {i + 2}: <strong>{asset.fileName}</strong>
+                            </span>
+                            <label className="flex items-center gap-2 text-[10px] text-slate-400">
+                              <span className="shrink-0">Ukuran {(asset.scale ?? editingTarget.modelScale).toFixed(1)}x</span>
+                              <input
+                                type="range"
+                                min="0.3"
+                                max="3"
+                                step="0.1"
+                                value={asset.scale ?? editingTarget.modelScale}
+                                onChange={(e) => handleExtraAssetScale(asset.id, parseFloat(e.target.value))}
+                                className="w-full accent-emerald-500"
+                              />
+                            </label>
+                          </div>
                           <div className="flex items-center shrink-0">
                             <button
                               type="button"
@@ -709,7 +792,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             >
                               <ChevronDown className="w-3.5 h-3.5" />
                             </button>
-                            <button type="button" onClick={() => handleRemoveExtraAsset(asset.id)} className="text-slate-400 hover:text-rose-400 p-1">
+                            <button
+                              type="button"
+                              onClick={() => askDeletePassword(`Hapus Gerakan ${i + 2} (${asset.fileName})?`, () => handleRemoveExtraAsset(asset.id))}
+                              className="text-slate-400 hover:text-rose-400 p-1"
+                            >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
@@ -723,7 +810,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                 <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800 text-[10px] text-slate-400">
                   <div>
-                    <span>Ukuran di atas QR ({editingTarget.modelScale.toFixed(1)}x)</span>
+                    <span>Ukuran Gerakan 1 di atas QR ({editingTarget.modelScale.toFixed(1)}x)</span>
                     <input
                       type="range"
                       min="0.3"
@@ -797,7 +884,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleVoiceRemove(lang)}
+                            onClick={() => askDeletePassword(`Hapus suara ${lang.toUpperCase()}?`, () => handleVoiceRemove(lang))}
                             className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400"
                             title="Hapus suara"
                           >
@@ -833,13 +920,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         <div className="fixed inset-0 z-70 bg-black/80 flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl text-center">
             <h4 className="font-bold text-sm text-white mb-2">Hapus "{deleteTarget.name}"?</h4>
-            <p className="text-xs text-slate-400 mb-4">File model 3D dan audio stiker ini akan dihapus dari perangkat.</p>
+            <p className="text-xs text-slate-400 mb-3">File model 3D dan audio stiker ini akan dihapus dari perangkat.</p>
+            <DeletePasswordField value={deletePw} error={deletePwError} onChange={setDeletePw} onEnter={confirmDelete} />
             <div className="flex justify-center gap-3">
               <button onClick={() => setDeleteTarget(null)} className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold">
                 Batal
               </button>
               <button onClick={confirmDelete} className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold">
                 Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pwPrompt && (
+        <div className="fixed inset-0 z-70 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl text-center">
+            <h4 className="font-bold text-sm text-white mb-3">{pwPrompt.title}</h4>
+            <DeletePasswordField value={deletePw} error={deletePwError} onChange={setDeletePw} onEnter={confirmPwPrompt} />
+            <div className="flex justify-center gap-3">
+              <button onClick={() => setPwPrompt(null)} className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold">
+                Batal
+              </button>
+              <button onClick={confirmPwPrompt} className="px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold">
+                Hapus
               </button>
             </div>
           </div>

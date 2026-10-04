@@ -34,7 +34,7 @@ export interface PackTarget {
   modelSha?: string;
   modelSize?: number;
   modelName?: string;
-  assets?: Array<{ id: string; name: string } & PackFile>;
+  assets?: Array<{ id: string; name: string; scale?: number } & PackFile>;
   // Narration voice per language
   voices?: Partial<Record<VoiceLang, PackFile & { name?: string }>>;
   // Legacy single voice (= Indonesian), still written for older app versions
@@ -115,7 +115,7 @@ function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
     autoPlayAudio: p.autoPlayAudio ?? true,
     customGlbFileName: p.modelName,
     customGlbUrl: p.model ? new URL(p.model, base).href : undefined,
-    assets: (p.assets || []).map((a) => ({ id: a.id, name: a.name, fileName: a.name, url: new URL(a.file, base).href })),
+    assets: (p.assets || []).map((a) => ({ id: a.id, name: a.name, fileName: a.name, url: new URL(a.file, base).href, scale: a.scale })),
     voices: Object.fromEntries(
       Object.entries(packVoices(p)).map(([lang, f]) => [lang, { name: f!.name || 'audio', url: new URL(f!.file, base).href }])
     ) as Partial<Record<VoiceLang, VoiceFile>>,
@@ -366,7 +366,7 @@ export async function buildManifest(
     const extras = t.assets || [];
     for (let i = 0; i < extras.length; i++) {
       const r = await take(await resolveModelSource(t, i + 1), 'asset', 'glb', i);
-      if (r) p.assets!.push({ id: extras[i].id, name: extras[i].fileName, file: r.path, sha: r.f.sha, size: r.f.bytes.byteLength });
+      if (r) p.assets!.push({ id: extras[i].id, name: extras[i].fileName, file: r.path, sha: r.f.sha, size: r.f.bytes.byteLength, scale: extras[i].scale });
     }
     for (const lang of VOICE_LANGS) {
       const voice = voiceOf(t, lang);
@@ -428,7 +428,7 @@ export async function importContentPack(file: Blob): Promise<number> {
       const data = entries[prefix + a.file];
       if (!data) continue;
       await ARDatabase.saveAssetBlob(a.id, copy(data), a.name);
-      target.assets!.push({ id: a.id, name: a.name.replace(/\.[^/.]+$/, ''), fileName: a.name });
+      target.assets!.push({ id: a.id, name: a.name.replace(/\.[^/.]+$/, ''), fileName: a.name, scale: a.scale });
     }
     for (const [lang, f] of Object.entries(packVoices(p)) as Array<[VoiceLang, PackFile & { name?: string }]>) {
       const data = entries[prefix + f.file];
