@@ -19,3 +19,17 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# --- Vinu & Veti ---
+# The web app calls these methods by name through window.AndroidBridge (WebView JavaScript
+# interface). R8 must keep them, otherwise the bridge silently stops working in release builds.
+-keepattributes JavascriptInterface
+-keepattributes *Annotation*
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
+-keep class com.example.NativeStorageBridge { *; }
+
+# Readable crash reports in Google Play (the mapping file is included in the app bundle)
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
