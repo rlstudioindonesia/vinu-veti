@@ -11,6 +11,7 @@ export interface ARQRTargetAsset {
   name: string;
   fileName: string;
   url?: string; // bundled / online location (used when no local copy exists)
+  scale?: number; // Size on the QR when this animation is shown (like modelScale); default = modelScale
 }
 
 export interface ARQRTarget {

@@ -505,6 +505,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           // Same scale as the main model: the character keeps its size in every animation
           const { pivot, scale } = normalizeModel(gltfScene, mainScale);
           if (i === 0) mainScale = scale;
+          // Each extra animation can have its own starting size (set in the admin panel)
+          if (i > 0) {
+            const base = target.modelScale || 1;
+            pivot.scale.setScalar((target.assets?.[i - 1]?.scale ?? base) / base);
+          }
           // Compile shaders and upload textures before the character pops in, so the appear
           // animation (and the first tap on an extra animation) does not stutter
           await prepareForGpu(pivot);
