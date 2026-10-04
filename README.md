@@ -31,8 +31,14 @@ dengan konten yang sudah ada.
 
 ## Diagnosa pelacakan AR
 
+Cara kerja pelacakan: QR dibaca (ZXing / BarcodeDetector) untuk mengenali stiker, lalu **pelacak optik**
+mengikuti pola QR di setiap frame kamera (optical flow Lucas-Kanade pada 49 titik, di Web Worker terpisah),
+dibantu sensor rotasi Android untuk menebak gerakan saat HP digoyang. Karena itu karakter tetap menempel
+saat HP digeser maupun diputar, dan tidak bergetar.
+
 Di layar kamera AR, ketuk nama stiker (kanan atas) **5×** untuk menampilkan info: pembaca QR yang dipakai,
-jumlah baca per detik, keterlambatan, dan sumber sensor gerak. Kirim screenshot-nya bila ada masalah.
+jumlah baca per detik, status pelacak optik (fps & ms per frame), dan sumber sensor gerak. Kirim
+screenshot-nya bila ada masalah.
 
 ## Konten online (disarankan)
 

@@ -4,6 +4,7 @@ import { ARQRTarget } from '../../types/arBook';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries, resolveModelSource } from '../../services/db';
 import { loadGlbCached, normalizeModel } from '../../utils/modelLoader';
+import { qrTracker } from '../../services/qrTracker';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
 import { Hand, AlertTriangle } from 'lucide-react';
@@ -78,6 +79,10 @@ function videoToScreen(anchor: QRAnchor, cw: number, ch: number) {
   return { scale, map: (p: Point2): Point2 => ({ x: offX + p.x * scale, y: offY + p.y * scale }) };
 }
 
+function normalizeCode(code: string) {
+  return (code || '').trim().toLowerCase();
+}
+
 /** Fallback when no corners are known: corners of the axis-aligned box (QR assumed facing the camera). */
 function boxCorners(a: QRAnchor): Point2[] {
   return [
@@ -134,6 +139,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   // Jitter filtering of the tracked QR + real-world "up" from the accelerometer
   const stabilizerRef = useRef(new QrPoseStabilizer());
   const lastAnchorRef = useRef<QRAnchor | null>(null);
+  const lastTrackSeqRef = useRef(0);
   // Previous QR reading (centre direction + capture time), to calibrate the gyroscope
   const lastReadingRef = useRef<{ dir: THREE.Vector3; t: number } | null>(null);
   // Diagnostics overlay (tap the sticker name 5x in the AR view)
@@ -199,6 +205,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     gravity.start();
     const gyro = new GyroTracker();
     gyro.start();
+    // The optical tracker uses the phone's rotation to predict where the QR moves between frames
+    qrTracker.rotationSince = (t) => (gyro.active ? gyro.rotationSince(t) : null);
     gyroRef.current = gyro;
 
     const clock = new THREE.Clock();
@@ -239,8 +247,23 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           const now = performance.now();
           gyro.poll();
           stab.applyCameraRotation(gyro.take());
+          // Measurement for this frame: the frame-by-frame tracker when it follows this sticker
+          // (every camera frame, steady), otherwise a new decode result
+          let reading: QRAnchor | null = null;
+          let precise = false;
+          const tracked = qrTracker.latest;
+          const tracking = qrTracker.isTracking() && tracked && normalizeCode(tracked.text) === normalizeCode(t.qrCode);
+          if (tracking && tracked.seq !== lastTrackSeqRef.current) {
+            lastTrackSeqRef.current = tracked.seq;
+            reading = tracked.anchor;
+            precise = true;
+          }
           if (lastAnchorRef.current !== anchor) {
             lastAnchorRef.current = anchor;
+            if (!tracking) reading = anchor;
+          }
+          if (reading) {
+            const anchor = reading;
             const raw = (anchor.cornerPoints?.length === 4 ? anchor.cornerPoints : boxCorners(anchor)).map(map);
             const measured = qrPoseFromCorners(raw, focal, cw / 2, ch / 2);
             if (measured) {
@@ -257,13 +280,13 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
               // not trail behind the QR while the phone is shaken
               const since = gyro.rotationSince(capturedAt);
               if (since) measured.premultiply(new THREE.Matrix4().makeRotationFromQuaternion(since.invert()));
-              stab.addMeasurement(measured, now, quadArea(raw) / (focal * focal));
+              stab.addMeasurement(measured, now, quadArea(raw) / (focal * focal), precise, capturedAt);
             }
           }
           // QR briefly not detected (motion blur): with a gyroscope the model stays put on the sticker;
           // without one, hide it soon so it does not float in the wrong place
           const lostFor = stab.msSinceMeasurement(now);
-          const smoothed = lostFor < (gyro.active ? 2500 : 700) ? stab.pose(delta) : null;
+          const smoothed = lostFor < (gyro.active ? 1000 : 500) ? stab.pose(delta) : null;
           const pose = smoothed ? uprightPose(smoothed, gravity.get()) : null;
           if (pose) {
             // Touch feedback: a quick squash-and-stretch jump
@@ -301,7 +324,12 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       }
 
       // Exposed for automated tests / diagnostics (appear-disappear progress)
-      (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length };
+      let at: [number, number] | null = null;
+      if (model?.visible) {
+        const p0 = new THREE.Vector3().setFromMatrixPosition(model.matrix).project(camera);
+        at = [((p0.x + 1) / 2) * (container.clientWidth || window.innerWidth), ((1 - p0.y) / 2) * (container.clientHeight || window.innerHeight)];
+      }
+      (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length, at, track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
 
       // Character of the previous QR shrinking away while the new one appears
       const now2 = performance.now();
@@ -351,6 +379,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     return () => {
       gravity.stop();
       gyro.stop();
+      qrTracker.rotationSince = null;
       cancelAnimationFrame(frameId);
       warmupRef.current.splice(0).forEach((j) => j.done());
       resizeObserver.disconnect();
@@ -536,6 +565,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
         st.reads = st.reads.filter((t) => now - t < 1000);
         setDebugText(
           `Pembaca QR: ${barcodeScanner.lastMethod || '-'} · ${st.reads.length} baca/dtk · telat ${Math.round(st.latency)} ms\n` +
+            `Pelacak optik: ${qrTracker.isTracking() ? `aktif ✓ ${qrTracker.fps} fps · ${qrTracker.ms.toFixed(0)} ms (${qrTracker.mode}${qrTracker.rotationSince ? ' + gyro' : ''})` : 'menunggu QR'}\n` +
             `Sensor gerak: ${gyroRef.current?.status() ?? '-'}`
         );
       }, 250);
