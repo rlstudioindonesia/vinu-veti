@@ -41,8 +41,14 @@ export class OneEuroFilter {
 // A sudden rotation bigger than this (radians) is treated as a misread until it persists
 const FLIP_ANGLE = 0.6; // ~34°
 const FLIP_CONFIRM_MEASUREMENTS = 4;
-// Distance changes smaller than this fraction are treated as noise (stops "growing/shrinking")
-const DISTANCE_DEADBAND = 0.03;
+// Size on screen is held still until the distance really changes by DISTANCE_UNLOCK (the phone moved
+// closer/further, not noise or the camera's autofocus "breathing"), then follows smoothly until it
+// matches again (within DISTANCE_SETTLE) and holds still once more
+const DISTANCE_UNLOCK = 0.06;
+const DISTANCE_SETTLE = 0.005;
+// A smaller difference that stays for this many readings (~1 s) is real too: corrected as well
+const DISTANCE_DRIFT = 0.025;
+const DISTANCE_DRIFT_READINGS = 30;
 
 /**
  * Keeps the QR pose in camera space steady.
@@ -62,6 +68,8 @@ export class QrPoseStabilizer {
   private flipCount = 0;
   private lastMeasurement = 0;
   private recentDist: number[] = [];
+  private distFollowing = false;
+  private distOffCount = 0;
   // Readings from the frame-by-frame optical tracker are precise and arrive every camera frame:
   // they are followed closely (little smoothing = no lag); decoder readings are noisier
   private precise = false;
@@ -76,6 +84,7 @@ export class QrPoseStabilizer {
     this.shownPos = null;
     this.flipCount = 0;
     this.recentDist = [];
+    this.distFollowing = false;
     this.lastMeasDir = null;
     this.slide.set(0, 0, 0);
   }
@@ -120,7 +129,9 @@ export class QrPoseStabilizer {
       this.flipCount++; // probably a misread: keep the previous rotation
     } else {
       this.flipCount = 0;
-      this.rot.slerp(q, reacquire ? 0.6 : precise ? 0.3 : 0.1);
+      // Small wobbles (< ~2°) are noise of the corners: follow them very little. Real turns: fast.
+      const kRot = precise ? 0.05 + THREE.MathUtils.clamp((angle - 0.035) / 0.15, 0, 1) * 0.45 : 0.1;
+      this.rot.slerp(q, reacquire ? 0.6 : kRot);
     }
 
     // Distance from the apparent size: area ≈ cos(tilt) / distance² for a unit square
@@ -145,7 +156,7 @@ export class QrPoseStabilizer {
     const cosTilt = Math.max(0.25, Math.abs(normal.dot(dir)));
     const sizeDist = areaNorm > 0 ? Math.sqrt(cosTilt / areaNorm) : p.length();
     this.recentDist.push(sizeDist);
-    if (this.recentDist.length > 7) this.recentDist.shift();
+    if (this.recentDist.length > (precise ? 15 : 7)) this.recentDist.shift();
     const median = [...this.recentDist].sort((a, b) => a - b)[Math.floor(this.recentDist.length / 2)];
 
     if (!this.pos || reacquire) {
@@ -158,14 +169,26 @@ export class QrPoseStabilizer {
     const curDir = this.pos.clone().normalize();
     const shift = curDir.angleTo(dir); // radians; 0.001 ≈ 1 px at a typical focal length
     const kDir = precise
-      ? THREE.MathUtils.clamp((shift - 0.0005) / 0.004, 0, 1) * 0.5 + 0.5
+      ? THREE.MathUtils.clamp((shift - 0.001) / 0.005, 0, 1) * 0.7 + 0.3
       : THREE.MathUtils.clamp((shift - 0.002) / 0.02, 0, 1) * 0.85 + 0.08;
     const nextDir = curDir.lerp(dir, kDir).normalize();
     const ratio = median / dist;
     let nextDist = dist;
-    if (Math.abs(ratio - 1) > 0.5) nextDist = median; // moved much closer/further: follow
-    else if (Math.abs(ratio - 1) > DISTANCE_DEADBAND) nextDist = dist + (median - dist) * (precise ? 0.25 : 0.1);
+    const change = Math.abs(ratio - 1);
+    if (change > 0.4) {
+      nextDist = median; // moved much closer/further at once: follow
+    } else {
+      this.distOffCount = change > DISTANCE_DRIFT ? this.distOffCount + 1 : 0;
+      if (change > DISTANCE_UNLOCK || this.distOffCount > DISTANCE_DRIFT_READINGS) this.distFollowing = true;
+      else if (change < DISTANCE_SETTLE) this.distFollowing = false;
+      if (this.distFollowing) nextDist = dist + (median - dist) * (precise ? 0.15 : 0.1);
+    }
     this.pos.copy(nextDir.multiplyScalar(nextDist));
+  }
+
+  /** Displayed distance (for diagnostics/tests). */
+  distance(): number {
+    return this.shownPos?.length() ?? 0;
   }
 
   /** Displayed pose for this frame: eases smoothly towards the target (no jumps on each QR reading). */
@@ -400,12 +423,17 @@ export class GyroTracker {
  */
 export class GravityTracker {
   private up: THREE.Vector3 | null = null;
+  private votes: number[] = [];
   private lastEvent = 0;
   private readonly onMotion = (e: DeviceMotionEvent) => {
     const a = e.accelerationIncludingGravity;
     if (!a || a.x === null || a.y === null || a.z === null) return;
     const v = new THREE.Vector3(a.x, a.y, a.z);
     if (v.lengthSq() < 1) return;
+    // Some browsers (Safari on iPhone) report the opposite sign. A phone used in portrait has its
+    // top edge pointing up most of the time, so the sign is learned from the first readings.
+    if (Math.abs(v.y) > 4 && this.votes.length < 30) this.votes.push(Math.sign(v.y));
+    if (this.votes.length >= 30 && this.votes.reduce((x, y) => x + y, 0) < -10) v.negate();
     // Compensate a rotated screen (landscape)
     const angle = THREE.MathUtils.degToRad(screen.orientation?.angle ?? 0);
     v.applyAxisAngle(new THREE.Vector3(0, 0, 1), -angle).normalize();

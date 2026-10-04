@@ -325,11 +325,15 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
 
       // Exposed for automated tests / diagnostics (appear-disappear progress)
       let at: [number, number] | null = null;
+      let rq: number[] | null = null;
       if (model?.visible) {
+        const qq = new THREE.Quaternion();
+        model.matrix.decompose(new THREE.Vector3(), qq, new THREE.Vector3());
+        rq = qq.toArray();
         const p0 = new THREE.Vector3().setFromMatrixPosition(model.matrix).project(camera);
         at = [((p0.x + 1) / 2) * (container.clientWidth || window.innerWidth), ((1 - p0.y) / 2) * (container.clientHeight || window.innerHeight)];
       }
-      (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length, at, track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
+      (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length, at, rq, dist: stabilizerRef.current.distance(), track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
 
       // Character of the previous QR shrinking away while the new one appears
       const now2 = performance.now();
