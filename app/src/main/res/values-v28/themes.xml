@@ -2,10 +2,10 @@
 <resources>
 
     <style name="Theme.MyApplication" parent="android:Theme.DeviceDefault.Light.NoActionBar">
-        <!-- Same sky colour as the web splash, so there is no black flash while the app starts -->
         <item name="android:windowBackground">@color/splash_sky</item>
-        <!-- Edge-to-edge on Android < 15: transparent system bars (Android 15+ ignores these) -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Draw into the notch area too (content stays inside the safe area) -->
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 </resources>
