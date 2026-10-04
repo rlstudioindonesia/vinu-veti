@@ -423,7 +423,7 @@ fun ARBookScreen(
             )
 
             setBackgroundColor(android.graphics.Color.parseColor("#CFEFFB"))
-            setLayerType(android.view.View.LAYER_TYPE_NONE, null)
+            setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
             val modelsDir = File(ctx.filesDir, "ar_models").apply { mkdirs() }
             val audioDir = File(ctx.filesDir, "ar_audio").apply { mkdirs() }
@@ -439,7 +439,6 @@ fun ARBookScreen(
             settings.apply {
               javaScriptEnabled = true
               domStorageEnabled = true
-              databaseEnabled = true
               allowFileAccess = true
               allowContentAccess = true
               mediaPlaybackRequiresUserGesture = false
