@@ -5,25 +5,24 @@ sebagai **Web App (PWA)**: dibuka dari link di Safari lalu "Tambahkan ke Layar U
 layar utama, layar penuh, bisa dipakai **offline**, dan otomatis ter-update. Tanpa akun Apple, tanpa
 Mac, tanpa biaya. Link yang sama juga bisa dibuka di HP Android.
 
-## Sekali saja: hosting gratis di Cloudflare Pages
+## Sekali saja: hosting gratis di Cloudflare
 
 1. Daftar gratis di <https://dash.cloudflare.com/sign-up>.
-2. Menu **Workers & Pages** → **Create** → tab **Pages** → **Connect to Git** → hubungkan GitHub dan
-   pilih repo `rlstudioindonesia/vinu-veti`.
-3. Isi pengaturan build:
-   - Production branch: `main`
-   - Framework preset: `None`
+2. Menu **Workers & Pages** → **Create** → **Import a repository** → hubungkan GitHub dan pilih repo
+   `rlstudioindonesia/vinu-veti`.
+3. Pengaturan build (repo sudah berisi `package.json` dan `wrangler.jsonc` di folder utama, jadi cukup
+   nilai bawaan ini):
+   - Project name: `vinu-veti`
    - Build command: `npm run build:web`
-   - Build output directory: `dist`
-   - Root directory (Advanced): `web-app`
-   - Environment variable: `NODE_VERSION` = `22`
-4. **Save and Deploy**. Setelah ±2 menit muncul alamat seperti `https://vinu-veti.pages.dev`.
+   - Deploy command: `npx wrangler deploy`
+   - Root directory: `/`
+4. **Deploy**. Setelah ±2 menit muncul alamat seperti `https://vinu-veti.<akun>.workers.dev`
+   (bisa dilihat di tab **Domains**).
 
 Setiap ada merge ke `main`, Cloudflare otomatis membangun dan meng-update situs. Konten QR/model 3D
 tetap diambil dari Supabase seperti di Android (tidak perlu upload ulang).
 
-(Netlify juga bisa dengan pengaturan yang sama: base directory `web-app`, build `npm run build:web`,
-publish `web-app/dist`.)
+(Netlify juga bisa: base directory `web-app`, build `npm run build:web`, publish `web-app/dist`.)
 
 ## Cara pakai untuk orang tua (iPhone/iPad)
 

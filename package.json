@@ -1,0 +1,8 @@
+{
+  "name": "vinu-veti",
+  "private": true,
+  "description": "Root helper for hosting the web/iPhone version (Cloudflare). The app itself is in web-app/.",
+  "scripts": {
+    "build:web": "npm --prefix web-app ci && npm --prefix web-app run build:web"
+  }
+}
