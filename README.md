@@ -29,6 +29,10 @@ tetap diunduh otomatis saat online (hanya file yang berubah) dan tersimpan di HP
 Jalankan build di komputer yang terhubung internet; jika server tidak terjangkau, build tetap jalan
 dengan konten yang sudah ada.
 
+## Versi iPhone / iPad
+
+Gratis sebagai Web App (PWA), tanpa App Store: lihat [docs/IPHONE.md](docs/IPHONE.md). Build: `npm run build:web` (hasil di `web-app/dist`).
+
 ## Diagnosa pelacakan AR
 
 Cara kerja pelacakan: QR dibaca (ZXing / BarcodeDetector) untuk mengenali stiker, lalu **pelacak optik**

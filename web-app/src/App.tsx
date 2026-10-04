@@ -12,6 +12,7 @@ import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 import { LanguagePicker } from './components/Portal/LanguagePicker';
 import type { ContentStatus } from './components/Portal/WelcomeScreen';
 import { loadSavedLang, useI18n } from './i18n';
+import { requestMotionPermission } from './utils/platform';
 
 // Loaded on demand so the app starts fast: AR (three.js + QR scanner) is fetched in the background
 // right after the splash screen, the admin tools only when they are opened.
@@ -157,6 +158,9 @@ export default function App() {
   }, []);
 
   const openCamera = () => {
+    // Called from a tap: iPhone/iPad need it to allow the motion sensor and later voice playback
+    requestMotionPermission();
+    soundService.unlock();
     resetAR();
     setCurrentView('ar');
   };

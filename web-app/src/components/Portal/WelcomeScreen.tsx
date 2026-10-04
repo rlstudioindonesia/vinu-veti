@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Lock, Volume2, VolumeX, ChevronRight, Sparkles } from 'lucide-react';
 import { soundService } from '../../services/soundService';
 import { LANGS, useI18n } from '../../i18n';
+import { InstallHint } from './InstallHint';
 import { MASCOT_SRC, Cloud, Star, Spark, Hills, Leaf, SKY_GRADIENT } from '../Common/Scenery';
 
 export interface ContentStatus {
@@ -218,6 +219,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
           </button>
         </div>
       </div>
+      <InstallHint />
     </div>
   );
 };

@@ -8,7 +8,8 @@
     "bundle-content": "node scripts/bundle-content.mjs",
     "build": "node scripts/bundle-content.mjs && vite build",
     "build:admin": "node scripts/bundle-content.mjs && vite build --mode admin",
-    "build:no-content": "vite build"
+    "build:no-content": "vite build",
+    "build:web": "vite build --mode web"
   },
   "dependencies": {
     "@fontsource/fredoka": "^5.3.0",

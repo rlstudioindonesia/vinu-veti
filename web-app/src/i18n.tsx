@@ -24,6 +24,28 @@ const STRINGS = {
   step2: { id: '2. Arahkan Kamera', en: '2. Point the Camera', tl: '2. Itutok ang Kamera' },
   step3: { id: '3. Muncul 3D!', en: '3. 3D Appears!', tl: '3. Lilitaw ang 3D!' },
   safeToPlay: { id: 'Aman untuk Belajar & Bermain', en: 'Safe for Learning & Play', tl: 'Ligtas sa Pag-aaral at Paglalaro' },
+  installTitle: { id: 'Pasang di iPhone / iPad', en: 'Install on iPhone / iPad', tl: 'I-install sa iPhone / iPad' },
+  installStep1: {
+    id: 'Ketuk tombol Bagikan di bawah layar Safari',
+    en: 'Tap the Share button at the bottom of Safari',
+    tl: 'I-tap ang Share button sa ibaba ng Safari',
+  },
+  installStep2: {
+    id: 'Pilih "Tambahkan ke Layar Utama"',
+    en: 'Choose "Add to Home Screen"',
+    tl: 'Piliin ang "Add to Home Screen"',
+  },
+  installStep3: {
+    id: 'Buka Vinu & Veti dari ikon di layar utama. Bisa dipakai offline!',
+    en: 'Open Vinu & Veti from the home screen icon. Works offline!',
+    tl: 'Buksan ang Vinu & Veti mula sa icon sa home screen. Gumagana offline!',
+  },
+  installSafari: {
+    id: 'Buka link ini di Safari untuk memasangnya.',
+    en: 'Open this link in Safari to install it.',
+    tl: 'Buksan ang link na ito sa Safari para i-install.',
+  },
+  installLater: { id: 'Nanti saja', en: 'Later', tl: 'Mamaya na' },
   noContentAdmin: {
     id: 'Belum ada konten AR. Tambahkan stiker & model 3D di menu Guru & Ortu.',
     en: 'No AR content yet. Add stickers & 3D models in the Teachers & Parents menu.',

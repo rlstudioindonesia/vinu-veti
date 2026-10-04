@@ -1,6 +1,19 @@
+/** Audio type from the first bytes (Safari only plays a blob when its type is right). */
+function sniffAudioType(b: Uint8Array): string {
+  const tag = String.fromCharCode(...b.slice(0, 4));
+  if (tag === 'RIFF') return 'audio/wav';
+  if (tag === 'OggS') return 'audio/ogg';
+  if (String.fromCharCode(...b.slice(4, 8)) === 'ftyp') return 'audio/mp4';
+  return 'audio/mpeg';
+}
+
 // Manual Audio Service for user-uploaded audio files (.mp3, .wav, .m4a)
 class SoundService {
   private currentAudio: HTMLAudioElement | null = null;
+  // iPhone/iPad only play sound started by a tap: one audio element and one audio context are
+  // unlocked on the first tap (see unlock) and reused for every voice and beep afterwards
+  private voiceEl: HTMLAudioElement | null = null;
+  private ctx: AudioContext | null = null;
   private currentAudioUrl: string | null = null;
   private isMuted: boolean = false;
 
@@ -15,11 +28,35 @@ class SoundService {
     return this.isMuted;
   }
 
+  private audioContext(): AudioContext {
+    if (!this.ctx) {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.ctx = new AudioCtx();
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => undefined);
+    return this.ctx;
+  }
+
+  /** Call from a tap (e.g. "open camera"): allows voices to play later on iPhone/iPad. */
+  public unlock() {
+    try {
+      this.audioContext();
+      if (!this.voiceEl) {
+        this.voiceEl = new Audio();
+        this.voiceEl.setAttribute('playsinline', '');
+        // A tiny silent clip played inside the tap unlocks this element for later playback
+        this.voiceEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+        this.voiceEl.play().catch(() => undefined);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   public playScanBeep() {
     if (this.isMuted) return;
     try {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      const ctx = new AudioCtx();
+      const ctx = this.audioContext();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
@@ -47,11 +84,12 @@ class SoundService {
         src = URL.createObjectURL(audioData);
         this.currentAudioUrl = src;
       } else {
-        const blob = new Blob([audioData], { type: 'audio/mpeg' });
+        const blob = new Blob([audioData], { type: sniffAudioType(new Uint8Array(audioData, 0, Math.min(12, audioData.byteLength))) });
         src = URL.createObjectURL(blob);
         this.currentAudioUrl = src;
       }
-      const audio = new Audio(src);
+      const audio = this.voiceEl ?? new Audio();
+      audio.src = src;
       this.currentAudio = audio;
       await audio.play();
     } catch (e) {
