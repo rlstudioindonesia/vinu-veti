@@ -33,3 +33,13 @@ export async function requestMotionPermission(): Promise<void> {
     // Denied or not possible: AR still works with the camera only
   }
 }
+
+/**
+ * Budget phones (≤ 3 GB RAM or ≤ 4 CPU cores): big / detailed models are scaled down a little more
+ * there so the AR view stays smooth. iPhones do not report RAM, so they count as capable.
+ */
+export function isLowEndDevice(): boolean {
+  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const cores = navigator.hardwareConcurrency || 8;
+  return (mem !== undefined && mem <= 3) || cores <= 4;
+}

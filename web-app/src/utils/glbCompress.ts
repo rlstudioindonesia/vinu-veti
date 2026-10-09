@@ -11,12 +11,15 @@
  * - Geometry + animations: duplicates removed, unused data pruned, redundant animation keyframes
  *   dropped (lossless within 1e-4), then Meshopt with high-precision quantisation (positions 16 bit,
  *   normals 14 bit, texture coordinates 14 bit), far below what can be seen on screen.
+ * - Draw calls (lossless, the main cost of detailed models on phones): parts that share a material
+ *   are merged into one mesh, and objects repeated many times (leaves, buttons…) are drawn as GPU
+ *   instances. Animated, skinned and morphing parts are left untouched, so animations stay the same.
  *
  * The AR viewer already decodes WebP textures and Meshopt geometry, also offline.
  */
 import { Document, Texture, WebIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS, EXTTextureWebP } from '@gltf-transform/extensions';
-import { dedup, getTextureColorSpace, listTextureSlots, meshopt, prune, resample } from '@gltf-transform/functions';
+import { dedup, getTextureColorSpace, instance, join, listTextureSlots, meshopt, prune, resample } from '@gltf-transform/functions';
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 
 const MAX_TEXTURE = 2048;
@@ -177,7 +180,7 @@ export async function compressGlb(input: ArrayBuffer, onStep?: (msg: string) => 
   const doc = await io.readBinary(new Uint8Array(input));
   const textures = await compressTextures(doc, onStep);
   onStep?.('Merapikan geometri & animasi…');
-  await doc.transform(dedup(), prune(), resample({ tolerance: 1e-4 }));
+  await doc.transform(dedup(), instance({ min: 5 }), join({ keepNamed: false }), prune(), resample({ tolerance: 1e-4 }));
   onStep?.('Mengompres geometri…');
   await doc.transform(
     meshopt({

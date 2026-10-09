@@ -9,6 +9,7 @@ import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
 import { Hand, AlertTriangle } from 'lucide-react';
 import { useI18n } from '../../i18n';
+import { isLowEndDevice } from '../../utils/platform';
 
 interface ThreeCanvasProps {
   target: ARQRTarget | null;
@@ -68,6 +69,14 @@ interface Outgoing {
   start: number;
   mixer: THREE.AnimationMixer | null;
 }
+
+// Render resolution adapts to how fast the phone draws the current character: detailed models
+// lower it a little (sharpness barely changes on a phone screen) instead of stuttering.
+const LOW_END = isLowEndDevice();
+const MAX_PIXEL_RATIO = Math.min(window.devicePixelRatio || 1, LOW_END ? 1.5 : 2);
+const MIN_PIXEL_RATIO = Math.min(MAX_PIXEL_RATIO, LOW_END ? 0.75 : 1);
+const SLOW_FRAME_S = 1 / 40;
+const FAST_FRAME_S = 1 / 55;
 
 // Model height in QR-sticker widths when modelScale = 1
 const BASE_MODEL_HEIGHT = 2.0;
@@ -169,8 +178,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 500);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'default' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // Budget phones skip multisampling: costly there, and hardly visible at their pixel density
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: !LOW_END, powerPreference: 'default' });
+    let pixelRatio = MAX_PIXEL_RATIO;
+    renderer.setPixelRatio(pixelRatio);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
@@ -211,11 +222,19 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
 
     const clock = new THREE.Clock();
     let frameId = 0;
+    // Nothing on screen: the canvas is cleared once and then left alone (more CPU/GPU for the camera
+    // and QR tracking, less battery)
+    let drewLastFrame = true;
+    // Average frame time while a character is shown, checked once per second for the resolution
+    let frameAvg = 1 / 60;
+    let frameCheck = 0;
+    let fastFor = 0;
     const animate = () => {
       frameId = requestAnimationFrame(animate);
-      const delta = Math.min(clock.getDelta(), 0.05);
+      const rawDelta = clock.getDelta();
+      const delta = Math.min(rawDelta, 0.05);
       const active = variantsRef.current[activeVariantRef.current];
-      active?.mixer?.update(delta);
+      if (modelRef.current?.visible) active?.mixer?.update(delta);
 
       const model = modelRef.current;
       const anchor = anchorRef.current;
@@ -374,6 +393,27 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           j.pivot.visible = false;
           j.done();
         });
+      }
+
+      const needsDraw = !!model?.visible || outgoingRef.current.length > 0;
+      if (!needsDraw && !drewLastFrame) return;
+      drewLastFrame = needsDraw;
+
+      if (model?.visible && rawDelta < 0.25) {
+        frameAvg = frameAvg * 0.9 + rawDelta * 0.1;
+        frameCheck += rawDelta;
+        fastFor = frameAvg < FAST_FRAME_S ? fastFor + rawDelta : 0;
+        if (frameCheck >= 1) {
+          frameCheck = 0;
+          let next = pixelRatio;
+          if (frameAvg > SLOW_FRAME_S) next = Math.max(MIN_PIXEL_RATIO, pixelRatio - 0.25);
+          else if (fastFor > 3) next = Math.min(MAX_PIXEL_RATIO, pixelRatio + 0.25);
+          if (next !== pixelRatio) {
+            pixelRatio = next;
+            fastFor = 0;
+            renderer.setPixelRatio(pixelRatio);
+          }
+        }
       }
 
       renderer.render(scene, camera);

@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { isLowEndDevice } from './platform';
 
 export interface LoadedGLBResult {
   scene: THREE.Group;
@@ -18,6 +19,12 @@ function getLoader(): GLTFLoader {
     draco.setDecoderPath(new URL('./draco/', window.location.href).href);
     sharedLoader = new GLTFLoader();
     sharedLoader.setDRACOLoader(draco);
+    // Big Meshopt models are decoded in background threads: the camera view keeps running smoothly
+    try {
+      (MeshoptDecoder as typeof MeshoptDecoder & { useWorkers?: (n: number) => void }).useWorkers?.(Math.min(2, Math.max(1, (navigator.hardwareConcurrency || 2) - 1)));
+    } catch {
+      // No workers (very old browser): decoded on the main thread as before
+    }
     sharedLoader.setMeshoptDecoder(MeshoptDecoder);
   }
   return sharedLoader;
@@ -32,6 +39,86 @@ export async function loadGlbModel(source: string | ArrayBuffer | Blob): Promise
   const data = source instanceof Blob ? await source.arrayBuffer() : source;
   const gltf = await loader.parseAsync(data, '');
   return { scene: gltf.scene, animations: gltf.animations || [] };
+}
+
+// Largest texture side kept for the AR view. A character covers only part of the phone screen, so
+// bigger textures cost GPU memory (and upload stutter) without visible detail.
+const LOW_END = isLowEndDevice();
+const AR_MAX_TEXTURE = LOW_END ? 1024 : 2048;
+
+async function downscaleImage(image: unknown, maxSide: number): Promise<CanvasImageSource | null> {
+  const img = image as { width?: number; height?: number; close?: () => void } | null;
+  if (!img?.width || !img.height) return null;
+  const k = maxSide / Math.max(img.width, img.height);
+  if (k >= 1) return null;
+  const w = Math.max(1, Math.round(img.width * k));
+  const h = Math.max(1, Math.round(img.height * k));
+  const src = image as ImageBitmapSource & CanvasImageSource;
+  try {
+    // Off the main thread where supported; keeps the orientation of the source (no flip)
+    return await createImageBitmap(src, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high', premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  } catch {
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(src, 0, 0, w, h);
+    return canvas;
+  }
+}
+
+/**
+ * Makes a loaded model cheaper to draw on this phone, once per file (the result is cached):
+ * - textures larger than the screen can show are scaled down (half the GPU memory per step);
+ * - glass-like materials (transmission) are drawn as normal see-through materials: three.js would
+ *   render the whole scene a second time for them every frame, and in AR that pass cannot see the
+ *   camera picture behind the glass anyway, so it only costs speed.
+ */
+async function lightenForDevice(scene: THREE.Object3D): Promise<void> {
+  const textures = new Set<THREE.Texture>();
+  const replaced = new Map<THREE.Material, THREE.Material>();
+  scene.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const next = mats.map((m) => {
+      const phys = m as THREE.MeshPhysicalMaterial;
+      if (!phys.isMeshPhysicalMaterial || !(phys.transmission > 0)) return m;
+      const done = replaced.get(m);
+      if (done) return done;
+      const std = new THREE.MeshStandardMaterial().copy(phys);
+      std.transparent = true;
+      std.opacity = Math.min(phys.opacity, 1 - phys.transmission * 0.7);
+      std.depthWrite = false;
+      phys.dispose();
+      replaced.set(m, std);
+      return std;
+    });
+    mesh.material = Array.isArray(mesh.material) ? next : next[0];
+    for (const m of next) for (const v of Object.values(m)) if (v instanceof THREE.Texture) textures.add(v);
+  });
+  // Several textures can share one image (same picture, different wrapping): resize each image once
+  const byImage = new Map<unknown, THREE.Texture[]>();
+  textures.forEach((tex) => {
+    if (tex.image) byImage.set(tex.image, [...(byImage.get(tex.image) ?? []), tex]);
+  });
+  await Promise.all(
+    [...byImage].map(async ([image, users]) => {
+      try {
+        const small = await downscaleImage(image, AR_MAX_TEXTURE);
+        if (!small) return;
+        for (const tex of users) {
+          tex.image = small;
+          tex.needsUpdate = true;
+        }
+        (image as { close?: () => void }).close?.();
+      } catch (err) {
+        console.warn('Texture kept at full size:', err);
+      }
+    })
+  );
 }
 
 // Parsed models stay in memory for a while: flipping back to a page shows its character instantly
@@ -94,7 +181,9 @@ export async function loadGlbCached(
     const result = (async () => {
       const source = await getSource();
       if (!source) throw new Error('missing');
-      return loadGlbModel(source);
+      const loaded = await loadGlbModel(source);
+      await lightenForDevice(loaded.scene);
+      return loaded;
     })();
     entry = { result, bytes: 0 };
     modelCache.set(key, entry);
