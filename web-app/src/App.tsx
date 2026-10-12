@@ -10,6 +10,7 @@ import { WelcomeScreen } from './components/Portal/WelcomeScreen';
 import { ARScannerOverlay } from './components/ARView/ARScannerOverlay';
 import { PrivacyPolicyModal } from './components/Privacy/PrivacyPolicyModal';
 import { LanguagePicker } from './components/Portal/LanguagePicker';
+import { ARSafetyNotice } from './components/ARView/ARSafetyNotice';
 import type { ContentStatus } from './components/Portal/WelcomeScreen';
 import { loadSavedLang, useI18n } from './i18n';
 import { requestMotionPermission } from './utils/platform';
@@ -47,6 +48,9 @@ export default function App() {
   // First launch: ask for the language once (can be changed later from the home screen)
   const [isLanguagePickerOpen, setIsLanguagePickerOpen] = useState<boolean>(() => loadSavedLang() === null);
   const [isLoadingApp, setIsLoadingApp] = useState<boolean>(true);
+  const [safetyAccepted, setSafetyAccepted] = useState<boolean>(false);
+  const safetyAcceptedRef = useRef(false);
+  safetyAcceptedRef.current = safetyAccepted;
   const [currentView, setCurrentView] = useState<'portal' | 'ar' | 'admin'>('portal');
   const [targets, setTargets] = useState<ARQRTarget[]>([]);
   const [activeTarget, setActiveTarget] = useState<ARQRTarget | null>(null);
@@ -133,6 +137,7 @@ export default function App() {
   }, []);
 
   const handleQRDetected = useCallback((code: string, anchor: QRAnchor) => {
+    if (!safetyAcceptedRef.current) return; // the safety notice is still on screen
     const clean = normalizeCode(code);
     const matched = targetsByCodeRef.current.get(clean);
     if (!matched) return;
@@ -162,6 +167,8 @@ export default function App() {
     requestMotionPermission();
     soundService.unlock();
     resetAR();
+    // Every time AR starts: show the safety notice first (supervision, surroundings)
+    setSafetyAccepted(false);
     setCurrentView('ar');
   };
 
@@ -193,8 +200,10 @@ export default function App() {
         <>
           <Suspense fallback={null}>
             <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
-            <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} onModelShown={handleModelShown} />
+            {/* Characters (and their voices) only appear after the safety notice is accepted */}
+            {safetyAccepted && <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} onModelShown={handleModelShown} />}
           </Suspense>
+          {!safetyAccepted && <ARSafetyNotice onAccept={() => setSafetyAccepted(true)} />}
           <ARScannerOverlay
             activeTarget={qrAnchor ? activeTarget : null}
             onBackToHome={() => {

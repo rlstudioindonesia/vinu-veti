@@ -1,144 +1,233 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kebijakan Privasi - Vinu Veti</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kebijakan Privasi – Vinu &amp; Veti</title>
+  <meta name="description" content="Kebijakan Privasi dan Peringatan Keselamatan AR aplikasi Vinu & Veti (Privacy Policy and AR Safety)." />
   <style>
     :root {
-      --bg: #090d16;
-      --card-bg: #0f172a;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --primary: #10b981;
-      --border: #1e293b;
+      --bg: #eef8fb;
+      --card: #ffffff;
+      --text: #173a6b;
+      --muted: #44607f;
+      --accent: #1ba7a0;
+      --warn-bg: #fff6d6;
+      --warn-border: #f2c94c;
+      --border: #d7e9f0;
     }
+    * { box-sizing: border-box; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background-color: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
       margin: 0;
-      padding: 24px 16px;
+      padding: 24px 16px 48px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
     }
     .container {
-      max-width: 800px;
+      max-width: 820px;
       margin: 0 auto;
-      background: var(--card-bg);
+      background: var(--card);
       border: 1px solid var(--border);
       border-radius: 20px;
-      padding: 32px 24px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      padding: 28px 22px;
     }
-    h1 {
-      color: var(--primary);
-      font-size: 26px;
-      margin-top: 0;
-      border-bottom: 2px solid var(--border);
-      padding-bottom: 12px;
+    h1 { margin: 0 0 4px; font-size: 26px; }
+    h2 { margin: 32px 0 8px; font-size: 19px; color: var(--accent); }
+    h3 { margin: 20px 0 6px; font-size: 16px; }
+    p, li { color: var(--muted); font-size: 15px; }
+    strong { color: var(--text); }
+    ul { padding-left: 20px; }
+    li { margin-bottom: 6px; }
+    .meta { font-size: 14px; color: var(--muted); margin: 0; }
+    .lang-nav { margin: 16px 0 0; font-size: 14px; }
+    .lang-nav a { color: var(--accent); font-weight: 600; }
+    .safety {
+      background: var(--warn-bg);
+      border: 2px solid var(--warn-border);
+      border-radius: 16px;
+      padding: 14px 16px;
+      margin-top: 16px;
     }
-    h2 {
-      color: #38bdf8;
-      font-size: 18px;
-      margin-top: 28px;
-      margin-bottom: 8px;
-    }
-    p, li {
-      color: var(--text-muted);
-      font-size: 14px;
-    }
-    strong {
-      color: var(--text);
-    }
-    ul {
-      padding-left: 20px;
-    }
-    li {
-      margin-bottom: 6px;
-    }
-    .badge {
-      display: inline-block;
-      background: rgba(16, 185, 129, 0.15);
-      color: var(--primary);
-      padding: 4px 12px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 600;
-      margin-bottom: 16px;
-      border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-    .footer {
-      margin-top: 40px;
-      padding-top: 16px;
-      border-top: 1px solid var(--border);
-      font-size: 12px;
-      color: var(--text-muted);
-      text-align: center;
-    }
+    .safety h3 { margin-top: 0; }
+    hr { border: 0; border-top: 2px solid var(--border); margin: 40px 0 8px; }
+    .footer { margin-top: 32px; font-size: 13px; color: var(--muted); text-align: center; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="badge">Google Play Developer Policy Compliant</div>
-    <h1>Kebijakan Privasi (Privacy Policy)</h1>
-    <p><strong>Aplikasi:</strong> Vinu Veti - AR Book Explorer (com.aistudio.arbook.kxywzp)</p>
-    <p><strong>Terakhir Diperbarui:</strong> 3 Oktober 2026</p>
-    <p><strong>Kontak Pengembang:</strong> linggadhani79@gmail.com</p>
+  <main class="container">
+    <h1>Kebijakan Privasi &amp; Keselamatan</h1>
+    <p class="meta"><strong>Aplikasi:</strong> Vinu &amp; Veti – Buku 3D Ajaib (Android: <code>com.aistudio.arbook.kxywzp</code>, serta versi web untuk iPhone/iPad)</p>
+    <p class="meta"><strong>Terakhir diperbarui:</strong> 12 Oktober 2026</p>
+    <p class="meta"><strong>Kontak pengembang:</strong> <a href="mailto:linggadhani79@gmail.com">linggadhani79@gmail.com</a></p>
+    <p class="lang-nav">Bahasa: <a href="#id">Bahasa Indonesia</a> · <a href="#en">English</a></p>
 
-    <h2>1. Pendahuluan</h2>
-    <p>
-      Kami menghormati dan berkomitmen untuk melindungi privasi pengguna aplikasi <strong>Vinu Veti</strong>. Kebijakan Privasi ini menjelaskan bagaimana aplikasi kami mengelola akses perangkat, data, dan privasi Anda sesuai dengan standar Google Play Developer Program Policy.
-    </p>
+    <!-- ===================== BAHASA INDONESIA ===================== -->
+    <section id="id">
+      <h2>1. Tentang aplikasi</h2>
+      <p>
+        Vinu &amp; Veti adalah aplikasi buku cerita untuk anak. Saat kamera diarahkan ke stiker QR di buku, karakter
+        3D muncul di atas halaman menggunakan <em>Augmented Reality</em> (AR) dan dapat mengeluarkan suara narasi.
+      </p>
 
-    <h2>2. Penggunaan Akses Kamera (Camera Permission)</h2>
-    <p>
-      Aplikasi ini meminta izin akses kamera perangkat (<code>android.permission.CAMERA</code>) semata-mata untuk fungsi inti Augmented Reality (AR):
-    </p>
-    <ul>
-      <li><strong>Tujuan Utama:</strong> Menangkap streaming video langsung untuk mendeteksi stiker kode QR pada buku fisik dan memproyeksikan objek 3D interaktif (.GLB) di atas halaman buku secara waktu nyata (real-time).</li>
-      <li><strong>Pemrosesan Lokal di Perangkat (On-Device Processing):</strong> Semua pemindaian citra kamera dilakukan 100% secara lokal pada prosesor perangkat pengguna.</li>
-      <li><strong>Tidak Ada Perekaman:</strong> Aplikasi <em>TIDAK</em> menyimpan, merekam, mengambil foto, maupun menyiarkan gambar/video kamera ke server mana pun.</li>
-    </ul>
+      <div class="safety" id="keselamatan">
+        <h3>⚠️ Peringatan keselamatan AR</h3>
+        <p>Setiap kali mode AR dibuka, aplikasi menampilkan peringatan ini dan karakter baru muncul setelah pengguna menekan "Saya Mengerti":</p>
+        <ul>
+          <li><strong>Pengawasan orang tua:</strong> anak sebaiknya selalu memakai AR bersama dan diawasi orang tua atau guru.</li>
+          <li><strong>Perhatikan lingkungan sekitar:</strong> gunakan di tempat yang aman sambil duduk, jangan berjalan sambil melihat layar, dan jauhi tangga, jalan raya, serta benda berbahaya.</li>
+          <li><strong>Istirahat:</strong> istirahatkan mata secara berkala.</li>
+        </ul>
+        <p>Aplikasi tidak memerlukan perangkat khusus seperti headset VR; cukup kamera ponsel atau tablet.</p>
+      </div>
 
-    <h2>3. Penyimpanan Data & File 3D (.GLB / Audio)</h2>
-    <p>
-      Aplikasi ini dirancang dengan prinsip <em>Offline-First</em>:
-    </p>
-    <ul>
-      <li>File model 3D (.GLB/.GLTF) dan file audio yang diunggah oleh pengguna disimpan secara lokal di ruang penyimpanan privat aplikasi (<code>context.filesDir/ar_models/</code>) dan database lokal (IndexedDB).</li>
-      <li>Tidak ada izin penyimpanan luas berbahaya (seperti <code>READ_EXTERNAL_STORAGE</code> atau <code>MANAGE_EXTERNAL_STORAGE</code>) yang diminta. Kami sepenuhnya mematuhi kebijakan Scoped Storage Google Play.</li>
-      <li>Data Anda tidak pernah diunggah ke internet atau dibagikan ke pihak ketiga.</li>
-    </ul>
+      <h2>2. Data yang kami kumpulkan</h2>
+      <p>
+        <strong>Kami tidak mengumpulkan data pribadi dari pengguna</strong>, termasuk anak-anak: tidak ada nama, email,
+        nomor telepon, foto, lokasi, kontak, maupun ID iklan. Anak tidak perlu membuat akun atau login.
+        Aplikasi <strong>tidak memuat iklan</strong> dan <strong>tidak memakai SDK analitik, pelacakan, atau iklan</strong> pihak ketiga.
+      </p>
 
-    <h2>4. Pengumpulan & Pembagian Data Pribadi</h2>
-    <p>
-      Aplikasi <strong>AR Book Explorer TIDAK mengumpulkan informasi identitas pribadi (PII)</strong>, seperti nama, nomor telepon, alamat email, lokasi GPS, maupun data perbankan. Kami tidak menggunakan SDK analitik invasif atau pelacak iklan pihak ketiga.
-    </p>
+      <h2>3. Kamera</h2>
+      <ul>
+        <li>Izin kamera dipakai hanya untuk menampilkan gambar kamera secara langsung, membaca stiker QR, dan menempatkan karakter 3D di atas buku.</li>
+        <li>Semua pemrosesan gambar dilakukan <strong>di perangkat</strong>. Gambar atau video kamera <strong>tidak pernah disimpan, direkam, atau dikirim</strong> ke server mana pun.</li>
+      </ul>
 
-    <h2>5. Privasi Anak-Anak (Children's Privacy / COPPA & GDPR-K)</h2>
-    <p>
-      Karena aplikasi ini dapat digunakan dalam konteks edukasi buku sekolah dan anak-anak, kami secara tegas mematuhi <em>Children's Online Privacy Protection Act (COPPA)</em> dan kebijakan Google Play Families:
-    </p>
-    <ul>
-      <li>Kami tidak secara sengaja mengumpulkan data apa pun dari anak-anak di bawah usia 13 tahun (atau batas usia yang berlaku di wilayah Anda).</li>
-      <li>Semua interaksi AR bersifat edukatif dan berjalan secara offline.</li>
-    </ul>
+      <h2>4. Sensor gerak dan getar</h2>
+      <ul>
+        <li>Sensor gerak perangkat (giroskop/akselerometer) dipakai di perangkat agar karakter 3D tetap stabil di atas stiker. Data sensor tidak disimpan dan tidak dikirim. Di iPhone/iPad, sistem meminta izin "Gerakan &amp; Orientasi" terlebih dahulu.</li>
+        <li>Getar singkat dipakai sebagai umpan balik saat karakter disentuh.</li>
+      </ul>
 
-    <h2>6. Penghapusan Data (Data Deletion)</h2>
-    <p>
-      Pengguna memiliki kendali penuh atas data mereka. Anda dapat menghapus setiap stiker QR, model 3D, atau audio yang tersimpan kapan saja melalui tombol Hapus di panel Admin aplikasi, atau dengan menghapus data aplikasi melalui Pengaturan Android.
-    </p>
+      <h2>5. Internet dan konten yang diunduh</h2>
+      <ul>
+        <li>Aplikasi mengunduh konten buku (model 3D dan file suara) dari server konten kami (layanan penyimpanan Supabase) lalu menyimpannya di perangkat agar bisa dipakai tanpa internet. Versi web untuk iPhone/iPad di-hosting di Cloudflare.</li>
+        <li>Saat mengunduh, penyedia layanan tersebut menerima data teknis yang memang diperlukan untuk mengirim file melalui internet (misalnya alamat IP dan jenis perangkat/browser). Kami tidak memakai data ini untuk mengenali, melacak, atau membuat profil pengguna. Pengiriman data menggunakan koneksi terenkripsi (HTTPS).</li>
+        <li>Tidak ada data pengguna yang diunggah dari perangkat anak.</li>
+      </ul>
 
-    <h2>7. Hubungi Kami</h2>
-    <p>
-      Jika Anda memiliki pertanyaan mengenai Kebijakan Privasi ini, silakan hubungi kami melalui email:
-      <br>
-      <strong>Email:</strong> <a href="mailto:linggadhani79@gmail.com" style="color: var(--primary);">linggadhani79@gmail.com</a>
-    </p>
+      <h2>6. Penyimpanan di perangkat</h2>
+      <ul>
+        <li>Model 3D, suara, dan daftar stiker disimpan di penyimpanan privat aplikasi (database lokal/IndexedDB). Aplikasi tidak meminta izin penyimpanan bersama perangkat.</li>
+        <li>Pilihan bahasa dan pengaturan suara disimpan di perangkat saja.</li>
+      </ul>
 
-    <div class="footer">
-      AR Book Explorer &copy; 2026. Hak Cipta Dilindungi.
-    </div>
-  </div>
+      <h2>7. Menu pengelola konten</h2>
+      <p>
+        Aplikasi memiliki menu tersembunyi untuk guru/pengelola konten yang mengunggah materi buku. Menu ini dilindungi
+        login akun pengelola (email dan kata sandi melalui Supabase) dan tidak ditujukan untuk anak. Data login hanya
+        dipakai untuk mempublikasikan konten dan sesi login disimpan di perangkat pengelola tersebut.
+      </p>
+
+      <h2>8. Privasi anak</h2>
+      <p>
+        Aplikasi ini dibuat untuk anak-anak dan keluarga serta mematuhi Kebijakan Keluarga Google Play. Kami tidak
+        dengan sengaja mengumpulkan informasi pribadi dari anak di bawah 13 tahun (atau batas usia yang berlaku di
+        wilayah Anda). Jika Anda yakin ada data anak yang tersimpan pada kami, hubungi kami agar segera dihapus.
+      </p>
+
+      <h2>9. Menghapus data</h2>
+      <ul>
+        <li>Semua konten yang tersimpan di perangkat dapat dihapus dengan menghapus data aplikasi (Pengaturan → Aplikasi → Vinu &amp; Veti → Penyimpanan → Hapus data) atau dengan meng-uninstall aplikasi. Di iPhone/iPad, hapus ikon aplikasi dari layar utama.</li>
+        <li>Pengelola konten dapat menghapus stiker, model 3D, dan suara melalui menu pengelola.</li>
+        <li>Permintaan lain terkait data dapat dikirim ke email di bawah.</li>
+      </ul>
+
+      <h2>10. Perubahan kebijakan</h2>
+      <p>Kebijakan ini dapat diperbarui. Tanggal "Terakhir diperbarui" di atas selalu menunjukkan versi terbaru.</p>
+
+      <h2>11. Hubungi kami</h2>
+      <p>Pertanyaan tentang kebijakan ini: <a href="mailto:linggadhani79@gmail.com">linggadhani79@gmail.com</a></p>
+    </section>
+
+    <hr />
+
+    <!-- ========================= ENGLISH ========================= -->
+    <section id="en" lang="en">
+      <h1>Privacy Policy &amp; Safety</h1>
+      <p class="meta"><strong>App:</strong> Vinu &amp; Veti – Magic 3D Book (Android: <code>com.aistudio.arbook.kxywzp</code>, and the web version for iPhone/iPad)</p>
+      <p class="meta"><strong>Last updated:</strong> 12 October 2026 · <strong>Contact:</strong> <a href="mailto:linggadhani79@gmail.com">linggadhani79@gmail.com</a></p>
+
+      <h2>1. About the app</h2>
+      <p>
+        Vinu &amp; Veti is a storybook app for children. When the camera is pointed at a QR sticker in the book, a 3D
+        character appears on the page using Augmented Reality (AR) and can play a narration voice.
+      </p>
+
+      <div class="safety" id="safety">
+        <h3>⚠️ AR safety warning</h3>
+        <p>Every time the AR mode starts, the app shows this warning, and characters only appear after the user taps "I Understand":</p>
+        <ul>
+          <li><strong>Parental supervision:</strong> children should always use AR together with, and supervised by, a parent or teacher.</li>
+          <li><strong>Be aware of your surroundings:</strong> use it sitting down in a safe place, do not walk while looking at the screen, and stay away from stairs, roads and dangerous objects.</li>
+          <li><strong>Breaks:</strong> rest your eyes regularly.</li>
+        </ul>
+        <p>No special device such as a VR headset is needed; only the camera of a phone or tablet.</p>
+      </div>
+
+      <h2>2. Data we collect</h2>
+      <p>
+        <strong>We do not collect personal data from users</strong>, including children: no names, email addresses,
+        phone numbers, photos, location, contacts or advertising IDs. Children do not create accounts or log in.
+        The app <strong>has no ads</strong> and uses <strong>no third-party analytics, tracking or advertising SDKs</strong>.
+      </p>
+
+      <h2>3. Camera</h2>
+      <ul>
+        <li>The camera permission is used only to show the live camera image, read QR stickers and place the 3D characters on the book.</li>
+        <li>All image processing happens <strong>on the device</strong>. Camera images and video are <strong>never stored, recorded or sent</strong> to any server.</li>
+      </ul>
+
+      <h2>4. Motion sensors and vibration</h2>
+      <ul>
+        <li>The device's motion sensors (gyroscope/accelerometer) are used on the device to keep the 3D characters steady on the sticker. Sensor data is not stored or sent. On iPhone/iPad the system first asks for "Motion &amp; Orientation" access.</li>
+        <li>A short vibration is used as feedback when a character is touched.</li>
+      </ul>
+
+      <h2>5. Internet and downloaded content</h2>
+      <ul>
+        <li>The app downloads the book content (3D models and voice files) from our content server (Supabase storage) and keeps it on the device so it works offline. The web version for iPhone/iPad is hosted on Cloudflare.</li>
+        <li>When downloading, these providers receive the technical data needed to deliver files over the internet (such as the IP address and device/browser type). We do not use this data to identify, track or profile users. Transfers use encrypted connections (HTTPS).</li>
+        <li>No user data is uploaded from a child's device.</li>
+      </ul>
+
+      <h2>6. Storage on the device</h2>
+      <ul>
+        <li>3D models, voices and the sticker list are stored in the app's private storage (local database/IndexedDB). The app does not request shared storage permissions.</li>
+        <li>The language and sound settings are stored on the device only.</li>
+      </ul>
+
+      <h2>7. Content manager area</h2>
+      <p>
+        The app has a hidden area for teachers/content managers who upload the book content. It is protected by a
+        content manager login (email and password via Supabase) and is not intended for children. Login data is only
+        used to publish content, and the login session is stored on that manager's device.
+      </p>
+
+      <h2>8. Children's privacy</h2>
+      <p>
+        This app is designed for children and families and complies with the Google Play Families Policy. We do not
+        knowingly collect personal information from children under 13 (or the applicable age in your region). If you
+        believe we hold any data about a child, contact us and we will delete it promptly.
+      </p>
+
+      <h2>9. Deleting data</h2>
+      <ul>
+        <li>All content stored on the device can be deleted by clearing the app's data (Settings → Apps → Vinu &amp; Veti → Storage → Clear data) or by uninstalling the app. On iPhone/iPad, remove the app icon from the home screen.</li>
+        <li>Content managers can delete stickers, 3D models and voices in the content manager area.</li>
+        <li>Other data requests can be sent to the email address below.</li>
+      </ul>
+
+      <h2>10. Changes to this policy</h2>
+      <p>This policy may be updated. The "Last updated" date above always shows the current version.</p>
+
+      <h2>11. Contact us</h2>
+      <p>Questions about this policy: <a href="mailto:linggadhani79@gmail.com">linggadhani79@gmail.com</a></p>
+    </section>
+
+    <p class="footer">Vinu &amp; Veti © 2026</p>
+  </main>
 </body>
 </html>

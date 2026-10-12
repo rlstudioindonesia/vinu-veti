@@ -90,12 +90,30 @@ const STRINGS = {
   modelMissing: { id: 'Model 3D belum diunggah untuk stiker ini', en: 'No 3D model uploaded for this sticker yet', tl: 'Wala pang 3D model para sa sticker na ito' },
   modelFailed: { id: 'Model 3D gagal dimuat', en: 'The 3D model could not be loaded', tl: 'Hindi ma-load ang 3D model' },
   tapToChange: { id: 'Sentuh karakternya untuk ganti gerakan!', en: 'Touch the character to change its move!', tl: 'Pindutin ang karakter para magpalit ng galaw!' },
+  // AR safety notice (shown every time the AR camera starts; Google Play Families policy)
+  safetyTitle: { id: 'Sebelum Bermain AR', en: 'Before You Play AR', tl: 'Bago Maglaro ng AR' },
+  safetyAdult: {
+    id: 'Mainkan bersama orang tua atau guru. Orang dewasa sebaiknya selalu mendampingi anak saat memakai AR.',
+    en: 'Play together with a parent or teacher. An adult should always supervise children while they use AR.',
+    tl: 'Maglaro kasama ang magulang o guro. Dapat laging may nakatatandang nagbabantay sa bata habang gumagamit ng AR.',
+  },
+  safetySurroundings: {
+    id: 'Perhatikan sekitarmu. Duduk di tempat yang aman, jangan berjalan sambil melihat layar, dan jauhi tangga, jalan, serta benda berbahaya.',
+    en: 'Watch your surroundings. Sit somewhere safe, do not walk while looking at the screen, and stay away from stairs, roads and dangerous objects.',
+    tl: 'Bantayan ang paligid. Umupo sa ligtas na lugar, huwag maglakad habang nakatingin sa screen, at lumayo sa hagdan, kalsada at mapanganib na bagay.',
+  },
+  safetyBreak: {
+    id: 'Istirahatkan mata secara berkala.',
+    en: 'Take regular breaks to rest your eyes.',
+    tl: 'Magpahinga paminsan-minsan para sa iyong mga mata.',
+  },
+  safetyOk: { id: 'Saya Mengerti', en: 'I Understand', tl: 'Naiintindihan Ko' },
   // Privacy
   privacyTitle: { id: 'Kebijakan Privasi', en: 'Privacy Policy', tl: 'Patakaran sa Privacy' },
   privacyBody: {
-    id: 'Vinu & Veti tidak mengumpulkan data pribadi. Kamera hanya dipakai di perangkat untuk membaca stiker QR dan tidak ada gambar yang disimpan atau dikirim. Konten 3D dan suara diunduh dari server kami lalu disimpan di perangkat agar bisa dipakai tanpa internet. Aplikasi tidak memuat iklan dan tidak meminta login untuk anak.',
-    en: 'Vinu & Veti does not collect personal data. The camera is only used on the device to read QR stickers; no images are stored or sent. 3D content and voices are downloaded from our server and kept on the device so they work offline. The app has no ads and does not ask children to log in.',
-    tl: 'Hindi nangongolekta ang Vinu & Veti ng personal na datos. Ginagamit lamang ang kamera sa device para basahin ang QR sticker; walang larawang iniimbak o ipinapadala. Ang 3D na nilalaman at mga boses ay dina-download mula sa aming server at iniimbak sa device para gumana kahit offline. Walang ads ang app at hindi nito pinapa-login ang mga bata.',
+    id: 'Vinu & Veti tidak mengumpulkan data pribadi. Kamera dan sensor gerak hanya dipakai di perangkat untuk membaca stiker QR dan menempatkan karakter 3D; tidak ada gambar yang disimpan atau dikirim. Konten 3D dan suara diunduh dari server kami lalu disimpan di perangkat agar bisa dipakai tanpa internet. Tidak ada iklan, analitik, maupun login untuk anak. Gunakan AR dengan pendampingan orang tua dan perhatikan lingkungan sekitar.',
+    en: 'Vinu & Veti does not collect personal data. The camera and motion sensors are only used on the device to read QR stickers and place the 3D characters; no images are stored or sent. 3D content and voices are downloaded from our server and kept on the device so they work offline. There are no ads, no analytics and no login for children. Use AR with parental supervision and stay aware of your surroundings.',
+    tl: 'Hindi nangongolekta ang Vinu & Veti ng personal na datos. Ginagamit lamang ang kamera at motion sensor sa device para basahin ang QR sticker at ilagay ang 3D na karakter; walang larawang iniimbak o ipinapadala. Ang 3D na nilalaman at mga boses ay dina-download mula sa aming server at iniimbak sa device para gumana kahit offline. Walang ads, analytics, o login para sa mga bata. Gamitin ang AR na may gabay ng magulang at bantayan ang paligid.',
   },
   close: { id: 'Tutup', en: 'Close', tl: 'Isara' },
 } satisfies Record<string, Record<Lang, string>>;
