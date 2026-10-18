@@ -64,6 +64,14 @@ export default function App() {
   activeTargetRef.current = activeTarget;
   const qrLossTimerRef = useRef<number | null>(null);
 
+  // Stickers to prepare while one is shown: the next two in book order and the previous one
+  // (children turn pages forward, sometimes back)
+  const upcoming = useMemo(() => {
+    const i = activeTarget ? targets.findIndex((t) => t.id === activeTarget.id) : -1;
+    if (i < 0) return [];
+    return [targets[i + 1], targets[i + 2], targets[i - 1]].filter((t): t is ARQRTarget => !!t);
+  }, [activeTarget, targets]);
+
   // Content updated while a sticker is shown (sync finished): switch to its new version, so the
   // updated model is loaded; a sticker that was unpublished is closed
   useEffect(() => {
@@ -218,7 +226,7 @@ export default function App() {
           <Suspense fallback={null}>
             <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
             {/* Characters (and their voices) only appear after the safety notice is accepted */}
-            {safetyAccepted && <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} onModelShown={handleModelShown} />}
+            {safetyAccepted && <ThreeCanvas target={activeTarget} upcoming={upcoming} qrAnchor={qrAnchor} onModelShown={handleModelShown} />}
           </Suspense>
           {!safetyAccepted && <ARSafetyNotice onAccept={() => setSafetyAccepted(true)} />}
           <ARScannerOverlay

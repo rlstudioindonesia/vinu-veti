@@ -321,41 +321,61 @@ async function resolveForAR(
   throw failure instanceof Error ? failure : new Error('offline');
 }
 
+function modelJob(target: ARQRTarget, index: number): MirrorJob | null {
+  const entry = getModelEntries(target)[index];
+  if (!entry || !isOnlineUrl(entry.url)) return null;
+  const asset = index > 0 ? target.assets?.[index - 1] : undefined;
+  return {
+    key: entry.id,
+    id: entry.id,
+    kind: 'model',
+    url: entry.url,
+    sha: index > 0 ? asset?.sha : target.customGlbSha,
+    size: index > 0 ? asset?.size : target.customGlbSize,
+    name: (index > 0 ? asset?.fileName : target.customGlbFileName) || `${entry.id}.glb`,
+  };
+}
+
+function audioJob(target: ARQRTarget, lang: VoiceLang): MirrorJob | null {
+  const voice = voiceOf(target, lang);
+  if (!voice || !isOnlineUrl(voice.url)) return null;
+  return { key: audioKey(target.id, lang), id: target.id, kind: 'audio', lang, url: voice.url, sha: voice.sha, size: voice.size, name: voice.name || 'audio' };
+}
+
 /** Model source for the AR view (see resolveForAR). */
 export async function resolveModelForAR(target: ARQRTarget, index: number): Promise<Blob | ArrayBuffer | string | null> {
-  const entry = getModelEntries(target)[index];
-  if (!entry || !isOnlineUrl(entry.url)) return resolveModelSource(target, index);
-  const asset = index > 0 ? target.assets?.[index - 1] : undefined;
+  const job = modelJob(target, index);
+  if (!job) return resolveModelSource(target, index);
   return resolveForAR(
-    {
-      key: entry.id,
-      id: entry.id,
-      kind: 'model',
-      url: entry.url,
-      sha: index > 0 ? asset?.sha : target.customGlbSha,
-      size: index > 0 ? asset?.size : target.customGlbSize,
-      name: (index > 0 ? asset?.fileName : target.customGlbFileName) || `${entry.id}.glb`,
-    },
-    () => ARDatabase.getAssetBlob(entry.id),
-    () => ARDatabase.nativeModelUrl(entry.id)
+    job,
+    () => ARDatabase.getAssetBlob(job.id),
+    () => ARDatabase.nativeModelUrl(job.id)
   );
+}
+
+/**
+ * Makes sure an online file is stored on the phone (downloads it when missing or outdated), without
+ * reading the stored file itself: used to get the next pages ready in the background.
+ */
+async function ensureStored(job: MirrorJob | null): Promise<void> {
+  if (!job || navigator.onLine === false) return;
+  const sha = await storedSha(job);
+  if (sha && (!job.sha || sha === job.sha)) return;
+  await mirrorFile(job);
+}
+
+/** Gets a sticker's main model and its voice in `lang` onto the phone ahead of time. */
+export async function prefetchSticker(target: ARQRTarget, lang: VoiceLang): Promise<void> {
+  await ensureStored(modelJob(target, 0));
+  await ensureStored(audioJob(target, lang));
 }
 
 /** Voice source for the AR view (see resolveForAR): a voice heard once also plays offline. */
 export async function resolveAudioForAR(target: ARQRTarget, lang: VoiceLang): Promise<Blob | ArrayBuffer | string | null> {
-  const voice = voiceOf(target, lang);
-  if (!voice || !isOnlineUrl(voice.url)) return resolveAudioSource(target, lang);
+  const job = audioJob(target, lang);
+  if (!job) return resolveAudioSource(target, lang);
   return resolveForAR(
-    {
-      key: audioKey(target.id, lang),
-      id: target.id,
-      kind: 'audio',
-      lang,
-      url: voice.url,
-      sha: voice.sha,
-      size: voice.size,
-      name: voice.name || 'audio',
-    },
+    job,
     () => ARDatabase.getAudioBlob(target.id, lang),
     () => ARDatabase.nativeAudioUrl(target.id, lang)
   );

@@ -202,6 +202,18 @@ export async function loadGlbCached(
   return { scene: cloneSkinned(scene) as THREE.Group, animations };
 }
 
+/** True when the model under `key` is in memory (or being prepared). */
+export function isModelCached(key: string): boolean {
+  return modelCache.has(key);
+}
+
+/** Room left in the memory budget for models (bytes). */
+export function modelCacheRoom(): number {
+  let total = 0;
+  modelCache.forEach((e) => (total += e.bytes));
+  return CACHE_BUDGET - total;
+}
+
 /** Forgets the cached versions of one model file (its newer version was just downloaded). */
 export function forgetModel(fileId: string) {
   for (const key of [...modelCache.keys()]) if (key.startsWith(`${fileId}|`)) modelCache.delete(key);

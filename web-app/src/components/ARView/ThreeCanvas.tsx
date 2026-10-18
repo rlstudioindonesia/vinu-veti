@@ -3,8 +3,8 @@ import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries } from '../../services/db';
-import { downloadProgress, resolveModelForAR } from '../../services/contentPack';
-import { forgetModel, loadGlbCached, normalizeModel } from '../../utils/modelLoader';
+import { downloadProgress, prefetchSticker, resolveModelForAR } from '../../services/contentPack';
+import { forgetModel, isModelCached, loadGlbCached, modelCacheRoom, normalizeModel } from '../../utils/modelLoader';
 import { qrTracker } from '../../services/qrTracker';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
@@ -14,6 +14,8 @@ import { isLowEndDevice } from '../../utils/platform';
 
 interface ThreeCanvasProps {
   target: ARQRTarget | null;
+  /** Stickers of the next (and previous) pages: prepared in the background so they appear instantly. */
+  upcoming?: ARQRTarget[];
   qrAnchor: QRAnchor | null;
   /** Called once each time the character appears on screen (new sticker, or back after losing the QR). */
   onModelShown?: () => void;
@@ -91,6 +93,17 @@ function videoToScreen(anchor: QRAnchor, cw: number, ch: number) {
   return { scale, map: (p: Point2): Point2 => ({ x: offX + p.x * scale, y: offY + p.y * scale }) };
 }
 
+/** Memory-cache key of a sticker's model file: changes with every new version. */
+function modelKey(target: ARQRTarget, index: number): string {
+  const entry = getModelEntries(target)[index];
+  return `${entry.id}|${target.updatedAt ?? ''}|${entry.url ?? ''}`;
+}
+
+// Wait after the current character appeared before preparing the next pages (it must settle first)
+const PREFETCH_DELAY_MS = 1500;
+// Keep this much of the model memory budget free when preparing models ahead of time
+const PREFETCH_RESERVE = 24 * 1048576;
+
 function normalizeCode(code: string) {
   return (code || '').trim().toLowerCase();
 }
@@ -127,8 +140,8 @@ const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion();
 
-export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onModelShown }) => {
-  const { t: tr } = useI18n();
+export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAnchor, onModelShown }) => {
+  const { t: tr, lang } = useI18n();
   const onShownRef = useRef(onModelShown);
   onShownRef.current = onModelShown;
   const announcedRef = useRef<boolean>(false);
@@ -548,7 +561,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           let loaded;
           try {
             // Cached per file + version: scanning a page again shows its character instantly
-            loaded = await loadGlbCached(`${entries[i].id}|${target.updatedAt ?? ''}|${entries[i].url ?? ''}`, () =>
+            loaded = await loadGlbCached(modelKey(target, i), () =>
               resolveModelForAR(target, i)
             );
           } catch (err) {
@@ -620,6 +633,33 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     window.addEventListener('online', again);
     return () => window.removeEventListener('online', again);
   }, [loadError]);
+
+  // Next pages, prepared in the background once the current character is on screen: their files are
+  // stored on the phone (instant and offline later), and the next page's model is also decoded into
+  // memory when there is room (not on budget phones), so turning the page shows it at once.
+  // One sticker at a time; scanning another sticker cancels the rest.
+  useEffect(() => {
+    if (!target || loadingModel || loadError || !upcoming?.length) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      for (let n = 0; n < upcoming.length && !cancelled; n++) {
+        const next = upcoming[n];
+        try {
+          await prefetchSticker(next, lang);
+          if (cancelled || n > 0 || LOW_END || (!next.customGlbUrl && !next.customGlbFileName)) continue;
+          const key = modelKey(next, 0);
+          if (isModelCached(key) || modelCacheRoom() < PREFETCH_RESERVE) continue;
+          await loadGlbCached(key, () => resolveModelForAR(next, 0));
+        } catch (err) {
+          console.warn('Prefetch skipped:', next.id, err);
+        }
+      }
+    }, PREFETCH_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [target, upcoming, loadingModel, loadError, lang]);
 
   // Download progress of the main model while it is fetched from the internet
   useEffect(() => {
