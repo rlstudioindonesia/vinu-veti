@@ -44,6 +44,46 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
     return () => barcodeScanner.stopCamera();
   }, [initCamera]);
 
+  // Phone locked / app sent to the background: Android takes the camera away, and when the app comes
+  // back the picture stays black or frozen. The camera is released while hidden (also saves battery
+  // and turns the torch off) and opened again on return; same when the camera stops by itself
+  // (another app took it).
+  useEffect(() => {
+    // The Android app also reports it directly (vv-app-pause / vv-app-resume), as not every WebView
+    // marks the page hidden when the app goes to the background
+    let hidden = document.visibilityState === 'hidden';
+    const pause = () => {
+      if (hidden) return;
+      hidden = true;
+      barcodeScanner.stopCamera();
+    };
+    const resume = () => {
+      if (!hidden) return;
+      hidden = false;
+      initCamera();
+    };
+    const onVisibility = () => (document.visibilityState === 'hidden' ? pause() : resume());
+    const video = videoRef.current;
+    const watchTrack = () => {
+      const stream = video?.srcObject as MediaStream | null;
+      stream?.getVideoTracks().forEach((track) => {
+        track.onended = () => {
+          if (!hidden) initCamera();
+        };
+      });
+    };
+    video?.addEventListener('loadedmetadata', watchTrack);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('vv-app-pause', pause);
+    window.addEventListener('vv-app-resume', resume);
+    return () => {
+      video?.removeEventListener('loadedmetadata', watchTrack);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('vv-app-pause', pause);
+      window.removeEventListener('vv-app-resume', resume);
+    };
+  }, [initCamera, videoRef]);
+
   // Sequential scan loop (never overlaps, so slow phones don't pile up decode work)
   useEffect(() => {
     if (cameraError || isLoading) return;

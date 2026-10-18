@@ -162,6 +162,7 @@ export async function publishToCloud(
     if (t.model) known.add(t.model);
     if (t.audio) known.add(t.audio);
     t.assets?.forEach((a) => known.add(a.file));
+    Object.values(t.voices || {}).forEach((v) => v?.file && known.add(v.file));
   });
 
   const progress: PublishProgress = { done: 0, uploaded: 0, skipped: 0 };
@@ -176,7 +177,9 @@ export async function publishToCloud(
       objects.forEach((o) => referenced.add(o));
       progress.current = t.name;
       onProgress?.({ ...progress });
-      if (known.has(path) || (await remoteExists(objects[0]))) {
+      // Parts are uploaded in order: only when the LAST part is there was a big file uploaded
+      // completely (an interrupted upload is completed now instead of breaking that model for everyone)
+      if (known.has(path) || (await remoteExists(objects[objects.length - 1]))) {
         progress.skipped++;
       } else {
         for (let i = 0; i < objects.length; i++) {
