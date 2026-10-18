@@ -4,6 +4,8 @@ export const VOICE_LANGS: VoiceLang[] = ['id', 'en', 'tl'];
 export interface VoiceFile {
   name: string; // original file name
   url?: string; // bundled / online location (used when no local copy exists)
+  sha?: string; // SHA-256 and size of the published online file (content packs only)
+  size?: number;
 }
 
 export interface ARQRTargetAsset {
@@ -12,6 +14,8 @@ export interface ARQRTargetAsset {
   fileName: string;
   url?: string; // bundled / online location (used when no local copy exists)
   scale?: number; // Size on the QR when this animation is shown (like modelScale); default = modelScale
+  sha?: string; // SHA-256 and size of the published online file (content packs only)
+  size?: number;
 }
 
 export interface ARQRTarget {
@@ -22,6 +26,8 @@ export interface ARQRTarget {
   // Main 3D model (.GLB). The file itself is stored locally under the target id.
   customGlbFileName?: string;
   customGlbUrl?: string; // bundled / online location of the main model
+  customGlbSha?: string; // SHA-256 and size of the published online file (content packs only)
+  customGlbSize?: number;
   assets?: ARQRTargetAsset[]; // Extra models for the same QR (tap the object to switch)
   modelScale: number; // Model height relative to the QR sticker width (1.0 = default)
   elevationOffset: number; // Height above the QR, in QR widths

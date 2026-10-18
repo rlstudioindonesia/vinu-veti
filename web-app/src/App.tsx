@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { ARQRTarget } from './types/arBook';
-import { ARDatabase, resolveAudioSource } from './services/db';
-import { syncContentPack } from './services/contentPack';
+import { ARDatabase } from './services/db';
+import { resolveAudioForAR, syncContentPack } from './services/contentPack';
 import { getCloudUser } from './services/cloudPublish';
 import { QRAnchor } from './services/barcodeScanner';
 import { soundService } from './services/soundService';
@@ -63,6 +63,28 @@ export default function App() {
   const activeTargetRef = useRef<ARQRTarget | null>(null);
   activeTargetRef.current = activeTarget;
   const qrLossTimerRef = useRef<number | null>(null);
+
+  // Stickers to prepare while one is shown: the next two in book order and the previous one
+  // (children turn pages forward, sometimes back)
+  const upcoming = useMemo(() => {
+    const i = activeTarget ? targets.findIndex((t) => t.id === activeTarget.id) : -1;
+    if (i < 0) return [];
+    return [targets[i + 1], targets[i + 2], targets[i - 1]].filter((t): t is ARQRTarget => !!t);
+  }, [activeTarget, targets]);
+
+  // Content updated while a sticker is shown (sync finished): switch to its new version, so the
+  // updated model is loaded; a sticker that was unpublished is closed
+  useEffect(() => {
+    const active = activeTargetRef.current;
+    if (!active) return;
+    const fresh = targets.find((t) => t.id === active.id);
+    if (!fresh) {
+      setActiveTarget(null);
+      setQrAnchor(null);
+    } else if (fresh.updatedAt !== active.updatedAt) {
+      setActiveTarget(fresh);
+    }
+  }, [targets]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Mirroring of online content to the phone (shown on the home screen)
@@ -144,6 +166,9 @@ export default function App() {
 
     if (activeTargetRef.current?.id !== matched.id) {
       soundService.playScanBeep();
+      // Fetch (and keep on the phone) the narration while the model loads, so it is ready when the
+      // character appears and also plays offline next time
+      resolveAudioForAR(matched, langRef.current).catch(() => undefined);
         setActiveTarget(matched);
     }
     setQrAnchor(anchor);
@@ -157,7 +182,7 @@ export default function App() {
   const handleModelShown = useCallback(() => {
     const t = activeTargetRef.current;
     if (!t || t.autoPlayAudio === false) return;
-    resolveAudioSource(t, langRef.current).then((src) => {
+    resolveAudioForAR(t, langRef.current).then((src) => {
       if (src && activeTargetRef.current?.id === t.id) soundService.playManualAudio(src);
     });
   }, []);
@@ -201,7 +226,7 @@ export default function App() {
           <Suspense fallback={null}>
             <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
             {/* Characters (and their voices) only appear after the safety notice is accepted */}
-            {safetyAccepted && <ThreeCanvas target={activeTarget} qrAnchor={qrAnchor} onModelShown={handleModelShown} />}
+            {safetyAccepted && <ThreeCanvas target={activeTarget} upcoming={upcoming} qrAnchor={qrAnchor} onModelShown={handleModelShown} />}
           </Suspense>
           {!safetyAccepted && <ARSafetyNotice onAccept={() => setSafetyAccepted(true)} />}
           <ARScannerOverlay

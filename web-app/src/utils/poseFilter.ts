@@ -49,6 +49,14 @@ const DISTANCE_SETTLE = 0.005;
 // A smaller difference that stays for this many readings (~1 s) is real too: corrected as well
 const DISTANCE_DRIFT = 0.025;
 const DISTANCE_DRIFT_READINGS = 30;
+// Same for the rotation: the character holds perfectly still until the sticker really turns by
+// ROT_UNLOCK (≈4°), then follows until it matches again (≈1°). Corner noise of the QR (which made the
+// character tremble and slowly turn by itself) stays below the unlock angle. A smaller turn that
+// persists (~0.7 s) is followed as well.
+const ROT_UNLOCK = 0.07;
+const ROT_SETTLE = 0.018;
+const ROT_DRIFT = 0.035;
+const ROT_DRIFT_READINGS = 20;
 
 /**
  * Keeps the QR pose in camera space steady.
@@ -66,6 +74,10 @@ export class QrPoseStabilizer {
   private shownPos: THREE.Vector3 | null = null;
   private shownRot = new THREE.Quaternion();
   private flipCount = 0;
+  // Average of the recent rotation readings (noise mostly cancels out) and the rotation lock state
+  private rotAvg = new THREE.Quaternion();
+  private rotFollowing = false;
+  private rotOffCount = 0;
   private lastMeasurement = 0;
   private recentDist: number[] = [];
   private distFollowing = false;
@@ -83,6 +95,8 @@ export class QrPoseStabilizer {
     this.pos = null;
     this.shownPos = null;
     this.flipCount = 0;
+    this.rotFollowing = false;
+    this.rotOffCount = 0;
     this.recentDist = [];
     this.distFollowing = false;
     this.lastMeasDir = null;
@@ -102,6 +116,7 @@ export class QrPoseStabilizer {
     this.rot.premultiply(inv);
     this.shownPos?.applyQuaternion(inv);
     this.shownRot.premultiply(inv);
+    this.rotAvg.premultiply(inv);
     this.lastMeasDir?.applyQuaternion(inv);
     this.slide.applyQuaternion(inv);
   }
@@ -127,11 +142,26 @@ export class QrPoseStabilizer {
     if (!this.pos) this.rot.copy(q);
     if (!reacquire && angle > FLIP_ANGLE && this.flipCount < FLIP_CONFIRM_MEASUREMENTS) {
       this.flipCount++; // probably a misread: keep the previous rotation
+    } else if (reacquire) {
+      this.flipCount = 0;
+      this.rot.slerp(q, 0.6);
+      this.rotAvg.copy(q);
+      this.rotFollowing = false;
+      this.rotOffCount = 0;
     } else {
       this.flipCount = 0;
-      // Small wobbles (< ~2°) are noise of the corners: follow them very little. Real turns: fast.
-      const kRot = precise ? 0.05 + THREE.MathUtils.clamp((angle - 0.035) / 0.15, 0, 1) * 0.45 : 0.1;
-      this.rot.slerp(q, reacquire ? 0.6 : kRot);
+      // Rotation lock (see ROT_UNLOCK): judged on the averaged readings, so the noise of single
+      // readings neither unlocks it nor keeps it from settling
+      this.rotAvg.slerp(q, angle > FLIP_ANGLE ? 1 : precise ? 0.2 : 0.35);
+      const off = this.rot.angleTo(this.rotAvg);
+      this.rotOffCount = off > ROT_DRIFT ? this.rotOffCount + 1 : 0;
+      if (off > ROT_UNLOCK || this.rotOffCount > ROT_DRIFT_READINGS) this.rotFollowing = true;
+      else if (off < ROT_SETTLE) this.rotFollowing = false;
+      if (this.rotFollowing) {
+        // Real turns: the bigger, the faster it is followed
+        const kRot = 0.12 + THREE.MathUtils.clamp((off - ROT_UNLOCK) / 0.2, 0, 1) * 0.4;
+        this.rot.slerp(this.rotAvg, kRot);
+      }
     }
 
     // Distance from the apparent size: area ≈ cos(tilt) / distance² for a unit square
@@ -168,9 +198,10 @@ export class QrPoseStabilizer {
     // Tiny shifts (a few px) are corner noise: follow them only slightly. Real moves: follow fast.
     const curDir = this.pos.clone().normalize();
     const shift = curDir.angleTo(dir); // radians; 0.001 ≈ 1 px at a typical focal length
+    // Below ~1 px the character is held almost still (a slow drift is still corrected over ~1 s).
     const kDir = precise
-      ? THREE.MathUtils.clamp((shift - 0.001) / 0.005, 0, 1) * 0.7 + 0.3
-      : THREE.MathUtils.clamp((shift - 0.002) / 0.02, 0, 1) * 0.85 + 0.08;
+      ? THREE.MathUtils.clamp((shift - 0.0012) / 0.005, 0, 1) * 0.9 + 0.04
+      : THREE.MathUtils.clamp((shift - 0.002) / 0.02, 0, 1) * 0.85 + 0.05;
     const nextDir = curDir.lerp(dir, kDir).normalize();
     const ratio = median / dist;
     let nextDist = dist;
@@ -452,6 +483,14 @@ export class GravityTracker {
   private up: THREE.Vector3 | null = null;
   private votes: number[] = [];
   private lastEvent = 0;
+  private gyroAt = 0;
+
+  /** Apply the camera's rotation since the previous frame (from the gyroscope). */
+  applyCameraRotation(delta: THREE.Quaternion | null) {
+    if (!this.up || !delta) return;
+    this.up.applyQuaternion(delta.clone().invert());
+    this.gyroAt = performance.now();
+  }
   private readonly onMotion = (e: DeviceMotionEvent) => {
     const a = e.accelerationIncludingGravity;
     if (!a || a.x === null || a.y === null || a.z === null) return;
@@ -464,10 +503,12 @@ export class GravityTracker {
     // Compensate a rotated screen (landscape)
     const angle = THREE.MathUtils.degToRad(screen.orientation?.angle ?? 0);
     v.applyAxisAngle(new THREE.Vector3(0, 0, 1), -angle).normalize();
-    // Low-pass (~0.35 s): keep gravity, drop hand shake
+    // Low-pass: keep gravity, drop hand shake. Turns of the phone are applied directly from the
+    // gyroscope (applyCameraRotation), so a slow filter does not lag behind while turning.
     const now = performance.now();
     const dt = this.lastEvent ? Math.min((now - this.lastEvent) / 1000, 0.1) : 0;
-    this.up = this.up ? this.up.lerp(v, 1 - Math.exp(-dt / 0.35)).normalize() : v;
+    const tau = this.gyroAt && now - this.gyroAt < 500 ? 0.9 : 0.35;
+    this.up = this.up ? this.up.lerp(v, 1 - Math.exp(-dt / tau)).normalize() : v;
     this.lastEvent = now;
   };
 
@@ -485,8 +526,10 @@ export class GravityTracker {
   }
 }
 
-// Within this angle of horizontal, the sticker is treated as lying flat (book on a table)
-const FLAT_LIMIT = THREE.MathUtils.degToRad(40);
+// Within this angle of horizontal, the sticker is treated as lying flat (book on a table); up to
+// FLAT_BLEND further it changes over smoothly to the sticker's own normal (no sudden tilt)
+const FLAT_LIMIT = THREE.MathUtils.degToRad(35);
+const FLAT_BLEND = THREE.MathUtils.degToRad(12);
 
 /**
  * When the sticker lies roughly flat, replace its (noisy) normal with true vertical from the
@@ -497,13 +540,20 @@ export function uprightPose(pose: THREE.Matrix4, up: THREE.Vector3 | null): THRE
   const e = pose.elements; // column-major
   const right = new THREE.Vector3(e[0], e[1], e[2]).normalize(); // QR +X
   const normal = new THREE.Vector3(e[8], e[9], e[10]).normalize(); // QR +Z (out of the paper)
-  if (normal.angleTo(up) > FLAT_LIMIT) return pose;
+  const tilt = normal.angleTo(up);
+  if (tilt >= FLAT_LIMIT + FLAT_BLEND) return pose;
 
   const z = up.clone();
   const x = right.sub(z.clone().multiplyScalar(right.dot(z))).normalize();
   if (x.lengthSq() < 0.5) return pose;
   const y = new THREE.Vector3().crossVectors(z, x);
   const out = new THREE.Matrix4().makeBasis(x, y, z);
+  const k = THREE.MathUtils.clamp((tilt - FLAT_LIMIT) / FLAT_BLEND, 0, 1);
+  if (k > 0) {
+    const q = new THREE.Quaternion().setFromRotationMatrix(out);
+    const raw = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().extractRotation(pose));
+    out.makeRotationFromQuaternion(q.slerp(raw, k * k * (3 - 2 * k)));
+  }
   out.setPosition(e[12], e[13], e[14]);
   return out;
 }

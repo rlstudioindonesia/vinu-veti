@@ -189,6 +189,80 @@ class NativeStorageBridge(
     return if (file.exists()) "https://appassets.androidplatform.net/audio/$targetId.mp3" else ""
   }
 
+  // Chunked backup copy of a model/voice of any size (base64 pieces). Written to a temporary file and
+  // renamed at the end, so a half-written file (app closed mid-way) is never served.
+  private var nativeFileStream: OutputStream? = null
+  private var nativeFileTmp: File? = null
+  private var nativeFileTarget: File? = null
+
+  @JavascriptInterface
+  fun beginNativeFile(kind: String, targetId: String): Boolean {
+    return try {
+      cancelNativeFile()
+      if (targetId.isEmpty() || targetId.contains('/') || targetId.contains("..")) return false
+      val target = if (kind == "audio") File(audioDir, "$targetId.mp3") else File(modelsDir, "$targetId.glb")
+      val tmp = File(target.parentFile, "${target.name}.part")
+      nativeFileTarget = target
+      nativeFileTmp = tmp
+      nativeFileStream = tmp.outputStream().buffered()
+      true
+    } catch (e: Exception) {
+      e.printStackTrace()
+      cancelNativeFile()
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun appendNativeFile(base64Data: String): Boolean {
+    return try {
+      val stream = nativeFileStream ?: return false
+      stream.write(Base64.decode(base64Data, Base64.DEFAULT))
+      true
+    } catch (e: Exception) {
+      e.printStackTrace()
+      cancelNativeFile()
+      false
+    }
+  }
+
+  @JavascriptInterface
+  fun finishNativeFile(): String {
+    return try {
+      val stream = nativeFileStream ?: return ""
+      val tmp = nativeFileTmp ?: return ""
+      val target = nativeFileTarget ?: return ""
+      stream.flush()
+      stream.close()
+      nativeFileStream = null
+      if (!tmp.renameTo(target)) {
+        target.delete()
+        if (!tmp.renameTo(target)) return ""
+      }
+      nativeFileTmp = null
+      nativeFileTarget = null
+      val folder = if (target.parentFile == audioDir) "audio" else "models"
+      "https://appassets.androidplatform.net/$folder/${target.name}"
+    } catch (e: Exception) {
+      e.printStackTrace()
+      cancelNativeFile()
+      ""
+    }
+  }
+
+  @JavascriptInterface
+  fun cancelNativeFile() {
+    try {
+      nativeFileStream?.close()
+    } catch (e: Exception) {
+      // ignore
+    }
+    nativeFileStream = null
+    nativeFileTmp?.delete()
+    nativeFileTmp = null
+    nativeFileTarget = null
+  }
+
   @JavascriptInterface
   fun deleteTargetFiles(targetId: String) {
     try {

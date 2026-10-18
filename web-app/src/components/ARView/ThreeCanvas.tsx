@@ -2,17 +2,20 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
-import { getModelEntries, resolveModelSource } from '../../services/db';
-import { loadGlbCached, normalizeModel } from '../../utils/modelLoader';
+import { getModelEntries } from '../../services/db';
+import { downloadProgress, prefetchSticker, resolveModelForAR } from '../../services/contentPack';
+import { forgetModel, isModelCached, loadGlbCached, modelCacheRoom, normalizeModel } from '../../utils/modelLoader';
 import { qrTracker } from '../../services/qrTracker';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
-import { Hand, AlertTriangle } from 'lucide-react';
+import { Hand, AlertTriangle, RotateCw } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import { isLowEndDevice } from '../../utils/platform';
 
 interface ThreeCanvasProps {
   target: ARQRTarget | null;
+  /** Stickers of the next (and previous) pages: prepared in the background so they appear instantly. */
+  upcoming?: ARQRTarget[];
   qrAnchor: QRAnchor | null;
   /** Called once each time the character appears on screen (new sticker, or back after losing the QR). */
   onModelShown?: () => void;
@@ -33,6 +36,8 @@ interface Step {
 
 // Taps this close to the character (screen px) also count, so small fingers do not miss it
 const TAP_PADDING_PX = 36;
+// Finger travel (screen px) before a sideways swipe starts turning the character
+const TURN_START_PX = 24;
 // Little "jump" when the character is touched
 const BOUNCE_MS = 280;
 // Appear (springy pop) / disappear (shrink) animation durations
@@ -88,6 +93,17 @@ function videoToScreen(anchor: QRAnchor, cw: number, ch: number) {
   return { scale, map: (p: Point2): Point2 => ({ x: offX + p.x * scale, y: offY + p.y * scale }) };
 }
 
+/** Memory-cache key of a sticker's model file: changes with every new version. */
+function modelKey(target: ARQRTarget, index: number): string {
+  const entry = getModelEntries(target)[index];
+  return `${entry.id}|${target.updatedAt ?? ''}|${entry.url ?? ''}`;
+}
+
+// Wait after the current character appeared before preparing the next pages (it must settle first)
+const PREFETCH_DELAY_MS = 1500;
+// Keep this much of the model memory budget free when preparing models ahead of time
+const PREFETCH_RESERVE = 24 * 1048576;
+
 function normalizeCode(code: string) {
   return (code || '').trim().toLowerCase();
 }
@@ -116,8 +132,16 @@ function quadArea(p: Point2[]): number {
 // model's front (+Z) faces the QR's bottom edge, i.e. the reader holding the book.
 const STAND_ON_QR = new THREE.Matrix4().makeRotationX(Math.PI / 2);
 
-export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onModelShown }) => {
-  const { t: tr } = useI18n();
+// Scratch objects reused by the render loop: no new allocations every frame (on budget phones the
+// garbage collector otherwise causes small, regular stutters)
+const _m1 = new THREE.Matrix4();
+const _m2 = new THREE.Matrix4();
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _q1 = new THREE.Quaternion();
+
+export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAnchor, onModelShown }) => {
+  const { t: tr, lang } = useI18n();
   const onShownRef = useRef(onModelShown);
   onShownRef.current = onModelShown;
   const announcedRef = useRef<boolean>(false);
@@ -159,13 +183,16 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   // Touch interaction
   const yawRef = useRef<number>(0);
   const userScaleRef = useRef<number>(1);
-  const pointerRef = useRef<{ down: boolean; x: number; y: number; startX: number; startY: number }>({
-    down: false, x: 0, y: 0, startX: 0, startY: 0,
+  const pointerRef = useRef<{ down: boolean; x: number; y: number; startX: number; startY: number; turning: boolean }>({
+    down: false, x: 0, y: 0, startX: 0, startY: 0, turning: false,
   });
   const pinchRef = useRef<{ dist: number; base: number } | null>(null);
 
   const [loadingModel, setLoadingModel] = useState<boolean>(false);
+  const [loadPercent, setLoadPercent] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped to load the sticker again after a failed download (internet back, or a tap on the message)
+  const [retry, setRetry] = useState(0);
   const [showHint, setShowHint] = useState<boolean>(false);
 
   // Scene setup + render loop
@@ -265,7 +292,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           const stab = stabilizerRef.current;
           const now = performance.now();
           gyro.poll();
-          stab.applyCameraRotation(gyro.take());
+          const turn = gyro.take();
+          stab.applyCameraRotation(turn);
+          gravity.applyCameraRotation(turn);
           // Measurement for this frame: the frame-by-frame tracker when it follows this sticker
           // (every camera frame, steady), otherwise a new decode result
           let reading: QRAnchor | null = null;
@@ -315,9 +344,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
             baseMatrixRef.current = (baseMatrixRef.current ?? new THREE.Matrix4())
               .copy(pose)
               .multiply(STAND_ON_QR)
-              .multiply(new THREE.Matrix4().makeTranslation(0, t.elevationOffset || 0, 0))
-              .multiply(new THREE.Matrix4().makeRotationY(yawRef.current))
-              .multiply(new THREE.Matrix4().makeScale(size, size, size));
+              .multiply(_m1.makeTranslation(0, t.elevationOffset || 0, 0))
+              .multiply(_m1.makeRotationY(yawRef.current))
+              .multiply(_m1.makeScale(size, size, size));
             want = model.children.some((c) => c.visible);
             if (want && !announcedRef.current) {
               announcedRef.current = true;
@@ -335,7 +364,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
         const s = risingRef.current ? easeOutBack(pr) : smoothstep(pr);
         if (baseMatrixRef.current && pr > 0.001) {
           model.matrixAutoUpdate = false;
-          model.matrix.copy(baseMatrixRef.current).multiply(new THREE.Matrix4().makeScale(s, s, s));
+          model.matrix.copy(baseMatrixRef.current).multiply(_m1.makeScale(s, s, s));
           model.visible = true;
         } else {
           model.visible = false;
@@ -346,10 +375,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       let at: [number, number] | null = null;
       let rq: number[] | null = null;
       if (model?.visible) {
-        const qq = new THREE.Quaternion();
-        model.matrix.decompose(new THREE.Vector3(), qq, new THREE.Vector3());
-        rq = qq.toArray();
-        const p0 = new THREE.Vector3().setFromMatrixPosition(model.matrix).project(camera);
+        model.matrix.decompose(_v1, _q1, _v2);
+        rq = _q1.toArray();
+        const p0 = _v1.setFromMatrixPosition(model.matrix).project(camera);
         at = [((p0.x + 1) / 2) * (container.clientWidth || window.innerWidth), ((1 - p0.y) / 2) * (container.clientHeight || window.innerHeight)];
       }
       (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length, at, rq, dist: stabilizerRef.current.distance(), track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
@@ -366,7 +394,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
         }
         o.mixer?.update(delta);
         const sc = 1 - smoothstep(k);
-        o.group.matrix.copy(o.base).multiply(new THREE.Matrix4().makeScale(sc, sc, sc));
+        o.group.matrix.copy(o.base).multiply(_m2.makeScale(sc, sc, sc));
         return true;
       });
 
@@ -533,8 +561,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           let loaded;
           try {
             // Cached per file + version: scanning a page again shows its character instantly
-            loaded = await loadGlbCached(`${entries[i].id}|${target.updatedAt ?? ''}|${entries[i].url ?? ''}`, () =>
-              resolveModelSource(target, i)
+            loaded = await loadGlbCached(modelKey(target, i), () =>
+              resolveModelForAR(target, i)
             );
           } catch (err) {
             if (i > 0 && err instanceof Error && err.message === 'missing') continue;
@@ -574,7 +602,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
         } catch (err) {
           console.warn('Model load failed:', entries[i]?.id, err);
           if (i === 0 && !cancelled) {
-            setLoadError(err instanceof Error && err.message === 'missing' ? 'missing' : 'failed');
+            setLoadError(err instanceof Error && err.message === 'missing' ? 'missing' : navigator.onLine === false ? 'offline' : 'failed');
             setLoadingModel(false);
           }
         }
@@ -585,7 +613,67 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     return () => {
       cancelled = true;
     };
-  }, [target, activateStep, prepareForGpu]);
+  }, [target, retry, activateStep, prepareForGpu]);
+
+  // A model shown from an older copy on the phone (no internet at the time): its new version was
+  // downloaded meanwhile, show that one
+  useEffect(() => {
+    const onUpdated = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      forgetModel(id);
+      if (target && getModelEntries(target).some((m) => m.id === id)) setRetry((r) => r + 1);
+    };
+    window.addEventListener('vv-file-updated', onUpdated);
+    return () => window.removeEventListener('vv-file-updated', onUpdated);
+  }, [target]);
+
+  useEffect(() => {
+    if (loadError !== 'offline' && loadError !== 'failed') return;
+    const again = () => setRetry((r) => r + 1);
+    window.addEventListener('online', again);
+    return () => window.removeEventListener('online', again);
+  }, [loadError]);
+
+  // Next pages, prepared in the background once the current character is on screen: their files are
+  // stored on the phone (instant and offline later), and the next page's model is also decoded into
+  // memory when there is room (not on budget phones), so turning the page shows it at once.
+  // One sticker at a time; scanning another sticker cancels the rest.
+  useEffect(() => {
+    if (!target || loadingModel || loadError || !upcoming?.length) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      for (let n = 0; n < upcoming.length && !cancelled; n++) {
+        const next = upcoming[n];
+        try {
+          await prefetchSticker(next, lang);
+          if (cancelled || n > 0 || LOW_END || (!next.customGlbUrl && !next.customGlbFileName)) continue;
+          const key = modelKey(next, 0);
+          if (isModelCached(key) || modelCacheRoom() < PREFETCH_RESERVE) continue;
+          await loadGlbCached(key, () => resolveModelForAR(next, 0));
+        } catch (err) {
+          console.warn('Prefetch skipped:', next.id, err);
+        }
+      }
+    }, PREFETCH_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [target, upcoming, loadingModel, loadError, lang]);
+
+  // Download progress of the main model while it is fetched from the internet
+  useEffect(() => {
+    if (!loadingModel || !target) {
+      setLoadPercent(null);
+      return;
+    }
+    const url = target.customGlbUrl;
+    const timer = window.setInterval(() => {
+      const p = downloadProgress(url);
+      setLoadPercent(p === null ? null : Math.round(p * 100));
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, [loadingModel, target]);
 
   // Touching the character: next animation (next clip / next uploaded .glb of the same QR)
   // Only when the sticker has more than one animation; otherwise touching does nothing at all.
@@ -627,12 +715,21 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    pointerRef.current = { down: true, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY };
+    pointerRef.current = { down: true, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, turning: false };
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const p = pointerRef.current;
     if (!p.down || pinchRef.current) return;
+    // Only a deliberate sideways swipe turns the character: a resting finger or a hand holding the
+    // phone at the screen edge must not make it rotate by itself
+    if (!p.turning) {
+      const dx = e.clientX - p.startX;
+      const dy = e.clientY - p.startY;
+      if (Math.abs(dx) < TURN_START_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      p.turning = true;
+      p.x = e.clientX;
+    }
     yawRef.current += (e.clientX - p.x) * 0.01;
     p.x = e.clientX;
     p.y = e.clientY;
@@ -703,15 +800,23 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       {loadingModel && qrAnchor && (
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 px-3 py-1.5 rounded-full text-white">
           <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-          <p className="text-[11px] font-semibold text-emerald-300">{tr('loadingModel')}</p>
+          <p className="text-[11px] font-semibold text-emerald-300">
+            {tr('loadingModel')}
+            {loadPercent !== null && ` ${loadPercent}%`}
+          </p>
         </div>
       )}
 
       {loadError && qrAnchor && (
-        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/70 px-3 py-1.5 rounded-full text-amber-300 text-[11px] font-semibold">
+        <button
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={() => loadError !== 'missing' && setRetry((r) => r + 1)}
+          className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/70 px-3 py-1.5 rounded-full text-amber-300 text-[11px] font-semibold"
+        >
           <AlertTriangle className="w-3.5 h-3.5" />
-          <span>{tr(loadError === 'missing' ? 'modelMissing' : 'modelFailed')}</span>
-        </div>
+          <span>{tr(loadError === 'missing' ? 'modelMissing' : loadError === 'offline' ? 'modelOffline' : 'modelFailed')}</span>
+          {loadError !== 'missing' && <RotateCw className="w-3.5 h-3.5" />}
+        </button>
       )}
 
       {debugText && (

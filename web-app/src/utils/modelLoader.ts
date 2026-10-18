@@ -17,6 +17,8 @@ function getLoader(): GLTFLoader {
   if (!sharedLoader) {
     const draco = new DRACOLoader();
     draco.setDecoderPath(new URL('./draco/', window.location.href).href);
+    // Default is 4 decoder threads: too many for budget phones, which also run the camera tracking
+    draco.setWorkerLimit(LOW_END ? 1 : 2);
     sharedLoader = new GLTFLoader();
     sharedLoader.setDRACOLoader(draco);
     // Big Meshopt models are decoded in background threads: the camera view keeps running smoothly
@@ -45,6 +47,12 @@ export async function loadGlbModel(source: string | ArrayBuffer | Blob): Promise
 // bigger textures cost GPU memory (and upload stutter) without visible detail.
 const LOW_END = isLowEndDevice();
 const AR_MAX_TEXTURE = LOW_END ? 1024 : 2048;
+// Normal / roughness / metalness / occlusion maps only shape the fine shading: at half the size of
+// the colour maps the difference is not visible on a phone, and a typical scene (2 × colour + normal
+// + roughness at 2048) needs ~78 MB of GPU memory instead of ~128 MB.
+const AR_MAX_DATA_TEXTURE = AR_MAX_TEXTURE / 2;
+// Material slots that hold colours; every other texture slot holds data
+const COLOR_SLOTS = new Set(['map', 'emissiveMap', 'sheenColorMap', 'specularColorMap']);
 
 async function downscaleImage(image: unknown, maxSide: number): Promise<CanvasImageSource | null> {
   const img = image as { width?: number; height?: number; close?: () => void } | null;
@@ -71,13 +79,15 @@ async function downscaleImage(image: unknown, maxSide: number): Promise<CanvasIm
 
 /**
  * Makes a loaded model cheaper to draw on this phone, once per file (the result is cached):
- * - textures larger than the screen can show are scaled down (half the GPU memory per step);
+ * - textures larger than the screen can show are scaled down (half the GPU memory per step), the
+ *   shading data maps (normal, roughness…) one step further than the colour maps;
  * - glass-like materials (transmission) are drawn as normal see-through materials: three.js would
  *   render the whole scene a second time for them every frame, and in AR that pass cannot see the
  *   camera picture behind the glass anyway, so it only costs speed.
  */
 async function lightenForDevice(scene: THREE.Object3D): Promise<void> {
   const textures = new Set<THREE.Texture>();
+  const colorTextures = new Set<THREE.Texture>();
   const replaced = new Map<THREE.Material, THREE.Material>();
   scene.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -97,9 +107,15 @@ async function lightenForDevice(scene: THREE.Object3D): Promise<void> {
       return std;
     });
     mesh.material = Array.isArray(mesh.material) ? next : next[0];
-    for (const m of next) for (const v of Object.values(m)) if (v instanceof THREE.Texture) textures.add(v);
+    for (const m of next)
+      for (const [slot, v] of Object.entries(m)) {
+        if (!(v instanceof THREE.Texture)) continue;
+        textures.add(v);
+        if (COLOR_SLOTS.has(slot)) colorTextures.add(v);
+      }
   });
-  // Several textures can share one image (same picture, different wrapping): resize each image once
+  // Several textures can share one image (same picture, different wrapping): resize each image once,
+  // keeping the colour-map size when any of its users is a colour map
   const byImage = new Map<unknown, THREE.Texture[]>();
   textures.forEach((tex) => {
     if (tex.image) byImage.set(tex.image, [...(byImage.get(tex.image) ?? []), tex]);
@@ -107,7 +123,8 @@ async function lightenForDevice(scene: THREE.Object3D): Promise<void> {
   await Promise.all(
     [...byImage].map(async ([image, users]) => {
       try {
-        const small = await downscaleImage(image, AR_MAX_TEXTURE);
+        const maxSide = users.some((t) => colorTextures.has(t)) ? AR_MAX_TEXTURE : AR_MAX_DATA_TEXTURE;
+        const small = await downscaleImage(image, maxSide);
         if (!small) return;
         for (const tex of users) {
           tex.image = small;
@@ -200,30 +217,72 @@ export async function loadGlbCached(
   return { scene: cloneSkinned(scene) as THREE.Group, animations };
 }
 
+/** True when the model under `key` is in memory (or being prepared). */
+export function isModelCached(key: string): boolean {
+  return modelCache.has(key);
+}
+
+/** Room left in the memory budget for models (bytes). */
+export function modelCacheRoom(): number {
+  let total = 0;
+  modelCache.forEach((e) => (total += e.bytes));
+  return CACHE_BUDGET - total;
+}
+
+/** Forgets the cached versions of one model file (its newer version was just downloaded). */
+export function forgetModel(fileId: string) {
+  for (const key of [...modelCache.keys()]) if (key.startsWith(`${fileId}|`)) modelCache.delete(key);
+}
+
 /** Forgets every cached model (e.g. after content was updated). */
 export function clearModelCache() {
   modelCache.clear();
 }
 
+// Size box every model is fitted into, in units of its height: as tall as 1, and its footprint
+// (widest side seen from above) at most FOOTPRINT. Tall characters are sized by their height, wide
+// scenes (the book's dioramas: a boat on the sea, a market) by their footprint. With the AR view's 2
+// QR widths per unit and the printed 45 mm sticker (~39 mm code), a diorama is ~14 cm wide, about an
+// A5 page, and a standing character ~8 cm tall: neither covers the whole book nor looks tiny.
+const FOOTPRINT = 1.75;
+// An extra animation file whose own size differs from the main model by more than this factor was
+// exported in other units (cm instead of m…): it is fitted on its own instead of using the main scale.
+const UNIT_MISMATCH = 2.5;
+
+/** Bounding box of what is actually drawn: hidden helpers, lines and points are left out. */
+function visibleBox(model: THREE.Object3D): THREE.Box3 {
+  const box = new THREE.Box3();
+  const part = new THREE.Box3();
+  model.traverseVisible((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    part.makeEmpty().expandByObject(mesh);
+    if (!part.isEmpty()) box.union(part);
+  });
+  return box.isEmpty() ? new THREE.Box3().setFromObject(model) : box;
+}
+
 /**
- * Wraps a model in a pivot so that it is 1 unit tall, centred on X/Z and standing on y = 0.
- * Models exported from different tools then all appear at a predictable size on the QR sticker.
+ * Wraps a model in a pivot so that it fits a 1-unit-tall size box, centred on X/Z and standing on y = 0.
+ * Models exported from different tools (any units, any proportions) then all appear at a similar,
+ * book-friendly size on the QR sticker.
  *
  * Pass `fixedScale` (the scale returned for the main model) for the other animation files of the same
  * character, so the character keeps exactly the same size when switching animations.
  */
 export function normalizeModel(model: THREE.Object3D, fixedScale?: number): { pivot: THREE.Group; scale: number } {
   model.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(model);
+  const box = visibleBox(model);
   const pivot = new THREE.Group();
   pivot.add(model);
   if (box.isEmpty()) return { pivot, scale: fixedScale ?? 1 };
 
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  // Flat models (e.g. a card) are sized by their largest side instead of their height
-  const ref = size.y > Math.max(size.x, size.z) * 0.2 ? size.y : Math.max(size.x, size.y, size.z);
-  const s = fixedScale ?? (ref > 0 ? 1 / ref : 1);
+  const ref = Math.max(size.y, Math.max(size.x, size.z) / FOOTPRINT);
+  const own = ref > 0 ? 1 / ref : 1;
+  const sameUnits = fixedScale !== undefined && own / fixedScale < UNIT_MISMATCH && fixedScale / own < UNIT_MISMATCH;
+  const s = sameUnits ? fixedScale! : own;
   model.scale.multiplyScalar(s);
   model.position.set(-center.x * s, -box.min.y * s, -center.z * s);
   return { pivot, scale: s };

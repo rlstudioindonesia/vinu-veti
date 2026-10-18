@@ -9,18 +9,24 @@
  *   (the browser canvas would darken the edges of cut-outs like hair or leaves).
  * - Normal / roughness / occlusion maps (data, not colours) get a stricter threshold than colour maps.
  * - Geometry + animations: duplicates removed, unused data pruned, redundant animation keyframes
- *   dropped (lossless within 1e-4), then Meshopt with high-precision quantisation (positions 16 bit,
+ *   dropped (within 1e-6, see RESAMPLE_TOLERANCE), then Meshopt with high-precision quantisation (positions 16 bit,
  *   normals 14 bit, texture coordinates 14 bit), far below what can be seen on screen.
  * - Draw calls (lossless, the main cost of detailed models on phones): parts that share a material
  *   are merged into one mesh, and objects repeated many times (leaves, buttons…) are drawn as GPU
  *   instances. Animated, skinned and morphing parts are left untouched, so animations stay the same.
  *
+ * - Optional (`simplifyScenery`), for very detailed scenes (more than SIMPLIFY_ABOVE triangles, e.g.
+ *   the book's dioramas of 200k-400k): the static surroundings (ground, stalls, houses…) are simplified to at most half the triangles,
+ *   never moving the surface by more than 0.1 % of its size. The characters (skinned or morphing
+ *   parts) keep every triangle: children look at them from close by, where fine folds would soften.
+ *   Off by default: from very close, small objects of the surroundings can look slightly smoother.
+ *
  * The AR viewer already decodes WebP textures and Meshopt geometry, also offline.
  */
-import { Document, Texture, WebIO } from '@gltf-transform/core';
+import { Document, Primitive, Texture, WebIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS, EXTTextureWebP } from '@gltf-transform/extensions';
-import { dedup, getTextureColorSpace, instance, join, listTextureSlots, meshopt, prune, resample } from '@gltf-transform/functions';
-import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
+import { dedup, getTextureColorSpace, instance, join, listTextureSlots, meshopt, prune, resample, simplifyPrimitive, weld } from '@gltf-transform/functions';
+import { MeshoptDecoder, MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer';
 
 const MAX_TEXTURE = 2048;
 // Minimum PSNR (dB) against the source pixels. ≥ 40 dB is visually indistinguishable for colour
@@ -34,6 +40,16 @@ const QUALITIES_COLOR = [0.9, 0.95, 1];
 const QUALITIES_DATA = [0.95, 0.98, 1];
 // Re-encoding must save at least this much, otherwise the original image is kept untouched
 const MIN_SAVING = 0.85;
+// Keyframes are dropped only where linear interpolation reproduces them within this tolerance. It is
+// absolute (scene units), and the book's models use very small units: 1e-4 dropped up to 95 % of
+// the keyframes and visibly changed poses (a head turned the other way); 1e-6 renders identically
+// (~67 dB) and still removes 40-80 % of the animation data.
+const RESAMPLE_TOLERANCE = 1e-6;
+// Simplification: only above this many triangles, to at most this share, within this error (relative
+// to each mesh's size)
+const SIMPLIFY_ABOVE = 120000;
+const SIMPLIFY_RATIO = 0.5;
+const SIMPLIFY_ERROR = 0.001;
 
 export interface TextureReport {
   name: string;
@@ -49,6 +65,24 @@ export interface CompressResult {
   before: number;
   after: number;
   textures: TextureReport[];
+  trianglesBefore: number;
+  trianglesAfter: number;
+}
+
+/** Characters and other animated surfaces: never simplified. */
+function isAnimatedSurface(prim: Primitive): boolean {
+  return !!prim.getAttribute('JOINTS_0') || prim.listTargets().length > 0;
+}
+
+function countTriangles(doc: Document, filter: (p: Primitive) => boolean = () => true): number {
+  let n = 0;
+  for (const mesh of doc.getRoot().listMeshes())
+    for (const prim of mesh.listPrimitives()) {
+      if (prim.getMode() !== 4 || !filter(prim)) continue; // TRIANGLES
+      const idx = prim.getIndices();
+      n += (idx ? idx.getCount() : prim.getAttribute('POSITION')?.getCount() ?? 0) / 3;
+    }
+  return Math.round(n);
 }
 
 const BITMAP_OPTS: ImageBitmapOptions = { premultiplyAlpha: 'none', colorSpaceConversion: 'none' };
@@ -169,9 +203,14 @@ async function compressTextures(doc: Document, onStep?: (msg: string) => void): 
 }
 
 /** Compresses a .glb. Returns the original data when compression would not make it smaller. */
-export async function compressGlb(input: ArrayBuffer, onStep?: (msg: string) => void): Promise<CompressResult> {
+export async function compressGlb(
+  input: ArrayBuffer,
+  onStep?: (msg: string) => void,
+  options: { simplifyScenery?: boolean } = {}
+): Promise<CompressResult> {
   await MeshoptEncoder.ready;
   await MeshoptDecoder.ready;
+  await MeshoptSimplifier.ready;
   const io = new WebIO()
     .registerExtensions(ALL_EXTENSIONS)
     .registerDependencies({ 'meshopt.encoder': MeshoptEncoder, 'meshopt.decoder': MeshoptDecoder });
@@ -180,7 +219,19 @@ export async function compressGlb(input: ArrayBuffer, onStep?: (msg: string) => 
   const doc = await io.readBinary(new Uint8Array(input));
   const textures = await compressTextures(doc, onStep);
   onStep?.('Merapikan geometri & animasi…');
-  await doc.transform(dedup(), instance({ min: 5 }), join({ keepNamed: false }), prune(), resample({ tolerance: 1e-4 }));
+  await doc.transform(dedup(), instance({ min: 5 }), join({ keepNamed: false }), prune(), resample({ tolerance: RESAMPLE_TOLERANCE }));
+  const trianglesBefore = countTriangles(doc);
+  if (options.simplifyScenery && trianglesBefore > SIMPLIFY_ABOVE && countTriangles(doc, (p) => !isAnimatedSurface(p)) > 0) {
+    onStep?.('Menyederhanakan lingkungan…');
+    await doc.transform(weld());
+    for (const mesh of doc.getRoot().listMeshes())
+      for (const prim of mesh.listPrimitives()) {
+        if (prim.getMode() !== 4 || isAnimatedSurface(prim)) continue;
+        simplifyPrimitive(prim, { simplifier: MeshoptSimplifier, ratio: SIMPLIFY_RATIO, error: SIMPLIFY_ERROR });
+      }
+    await doc.transform(prune());
+  }
+  const trianglesAfter = countTriangles(doc);
   onStep?.('Mengompres geometri…');
   await doc.transform(
     meshopt({
@@ -197,6 +248,8 @@ export async function compressGlb(input: ArrayBuffer, onStep?: (msg: string) => 
   onStep?.('Menyimpan…');
   const out = await io.writeBinary(doc);
 
-  if (out.byteLength >= input.byteLength) return { data: input, before: input.byteLength, after: input.byteLength, textures };
-  return { data: out.slice().buffer as ArrayBuffer, before: input.byteLength, after: out.byteLength, textures };
+  if (out.byteLength >= input.byteLength) {
+    return { data: input, before: input.byteLength, after: input.byteLength, textures, trianglesBefore, trianglesAfter: trianglesBefore };
+  }
+  return { data: out.slice().buffer as ArrayBuffer, before: input.byteLength, after: out.byteLength, textures, trianglesBefore, trianglesAfter };
 }
