@@ -9,6 +9,10 @@ type FileData = Blob | ArrayBuffer;
 
 interface AndroidBridge {
   saveModelBase64?: (id: string, b64: string) => string;
+  beginNativeFile?: (kind: string, id: string) => boolean;
+  appendNativeFile?: (b64: string) => boolean;
+  finishNativeFile?: () => string;
+  cancelNativeFile?: () => void;
   saveAudioBase64?: (id: string, b64: string) => string;
   getModelUrl?: (id: string) => string;
   getAudioUrl?: (id: string) => string;
@@ -31,21 +35,46 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return window.btoa(binary);
 }
 
-// Native copies are a backup in app-private storage in case the WebView evicts IndexedDB data.
+// Native copies are a backup in app-private storage in case the WebView evicts IndexedDB data, so a
+// file that was downloaded once keeps working offline. Older app builds without the chunked bridge
+// only take files up to NATIVE_COPY_LIMIT in one call.
 const NATIVE_COPY_LIMIT = 15 * 1024 * 1024;
+// Multiple of 3, so the base64 pieces concatenate cleanly
+const NATIVE_CHUNK = 768 * 1024;
 
-async function saveNativeCopy(kind: 'model' | 'audio', id: string, data: FileData) {
+async function writeNativeCopy(kind: 'model' | 'audio', id: string, data: FileData) {
   const bridge = getAndroidBridge();
-  const save = kind === 'model' ? bridge?.saveModelBase64 : bridge?.saveAudioBase64;
-  if (!bridge || !save) return;
+  if (!bridge) return;
   try {
     const buffer = data instanceof Blob ? await data.arrayBuffer() : data;
-    if (buffer.byteLength < NATIVE_COPY_LIMIT) {
-      save.call(bridge, id, arrayBufferToBase64(buffer));
+    if (bridge.beginNativeFile && bridge.appendNativeFile && bridge.finishNativeFile) {
+      if (!bridge.beginNativeFile(kind, id)) return;
+      for (let i = 0; i < buffer.byteLength; i += NATIVE_CHUNK) {
+        if (!bridge.appendNativeFile(arrayBufferToBase64(buffer.slice(i, i + NATIVE_CHUNK)))) {
+          bridge.cancelNativeFile?.();
+          return;
+        }
+        // Let the camera / AR view run between pieces
+        await new Promise((r) => window.setTimeout(r, 0));
+      }
+      bridge.finishNativeFile();
+      return;
     }
+    const save = kind === 'model' ? bridge.saveModelBase64 : bridge.saveAudioBase64;
+    if (save && buffer.byteLength < NATIVE_COPY_LIMIT) save.call(bridge, id, arrayBufferToBase64(buffer));
   } catch (err) {
     console.warn('Native storage note:', err);
   }
+}
+
+// Native copies are written one after the other (the bridge writes one file at a time); deletes wait
+// for pending writes, so a deleted file can never come back
+let nativeQueue: Promise<void> = Promise.resolve();
+
+function saveNativeCopy(kind: 'model' | 'audio', id: string, data: FileData): Promise<void> {
+  const job = nativeQueue.then(() => writeNativeCopy(kind, id, data));
+  nativeQueue = job.catch(() => undefined);
+  return nativeQueue;
 }
 
 let dbInstance: IDBDatabase | null = null;
@@ -91,18 +120,49 @@ function requestToPromise<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
+// Small companion row with only the SHA-256 of a stored file: checking whether a file is up to date
+// must not read the whole (possibly 50 MB) file into memory
+function shaKey(key: string): string {
+  return `${key}#sha`;
+}
+
+function txDone(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
 async function putAsset(key: string, data: FileData, name: string, type: 'glb' | 'audio', sha?: string) {
   const db = await getDB();
   const tx = db.transaction([STORE_ASSETS], 'readwrite');
-  await requestToPromise(tx.objectStore(STORE_ASSETS).put({ id: key, data, name, type, sha, createdAt: Date.now() }));
+  const store = tx.objectStore(STORE_ASSETS);
+  store.put({ id: key, data, name, type, sha, createdAt: Date.now() });
+  if (sha) store.put({ id: shaKey(key), sha });
+  else store.delete(shaKey(key));
+  await txDone(tx);
+}
+
+/** Deletes stored files and their SHA rows. */
+function deleteKeys(store: IDBObjectStore, keys: string[]) {
+  keys.forEach((k) => {
+    store.delete(k);
+    store.delete(shaKey(k));
+  });
 }
 
 /** SHA-256 recorded when a file was mirrored from the online content (used to skip unchanged files). */
 async function getAssetSha(key: string): Promise<string | null> {
   try {
     const db = await getDB();
-    const tx = db.transaction([STORE_ASSETS], 'readonly');
-    const row = await requestToPromise(tx.objectStore(STORE_ASSETS).get(key));
+    const store = db.transaction([STORE_ASSETS], 'readonly').objectStore(STORE_ASSETS);
+    const meta = await requestToPromise(store.get(shaKey(key)));
+    if (meta) return meta.sha || null;
+    // Files stored by older versions have no SHA row yet: read the file row once and add it
+    if ((await requestToPromise(db.transaction([STORE_ASSETS], 'readonly').objectStore(STORE_ASSETS).count(key))) === 0) return null;
+    const row = await requestToPromise(db.transaction([STORE_ASSETS], 'readonly').objectStore(STORE_ASSETS).get(key));
+    if (row?.sha) db.transaction([STORE_ASSETS], 'readwrite').objectStore(STORE_ASSETS).put({ id: shaKey(key), sha: row.sha });
     return row?.sha || null;
   } catch {
     return null;
@@ -171,6 +231,7 @@ export const ARDatabase = {
 
   async deleteTarget(target: ARQRTarget): Promise<void> {
     const ids = [target.id, ...(target.assets || []).map((a) => a.id)];
+    await nativeQueue;
     try {
       [...ids, ...VOICE_LANGS.map((l) => nativeAudioId(target.id, l))].forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
     } catch {
@@ -180,8 +241,7 @@ export const ARDatabase = {
     await new Promise<void>((resolve) => {
       const tx = db.transaction([STORE_TARGETS, STORE_ASSETS], 'readwrite');
       tx.objectStore(STORE_TARGETS).delete(target.id);
-      ids.forEach((id) => tx.objectStore(STORE_ASSETS).delete(id));
-      VOICE_LANGS.forEach((l) => tx.objectStore(STORE_ASSETS).delete(audioKey(target.id, l)));
+      deleteKeys(tx.objectStore(STORE_ASSETS), [...ids, ...VOICE_LANGS.map((l) => audioKey(target.id, l))]);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
@@ -189,6 +249,7 @@ export const ARDatabase = {
 
   /** Removes locally stored files (so a newer bundled/online copy is used instead). */
   async deleteStoredFiles(ids: string[]): Promise<void> {
+    await nativeQueue;
     try {
       ids.forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
     } catch {
@@ -197,10 +258,7 @@ export const ARDatabase = {
     const db = await getDB();
     await new Promise<void>((resolve) => {
       const tx = db.transaction([STORE_ASSETS], 'readwrite');
-      ids.forEach((id) => {
-        tx.objectStore(STORE_ASSETS).delete(id);
-        VOICE_LANGS.forEach((l) => tx.objectStore(STORE_ASSETS).delete(audioKey(id, l)));
-      });
+      ids.forEach((id) => deleteKeys(tx.objectStore(STORE_ASSETS), [id, ...VOICE_LANGS.map((l) => audioKey(id, l))]));
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
@@ -209,6 +267,7 @@ export const ARDatabase = {
   /** Deletes exact stored file keys (`<id>` for models, `audioKey()` for voices), including native copies. */
   async deleteAssetKeys(keys: string[]): Promise<void> {
     if (keys.length === 0) return;
+    await nativeQueue;
     try {
       new Set(keys.map((k) => k.replace(/_audio$/, '').replace(/_audio_(en|tl)$/, '_$1'))).forEach((id) =>
         getAndroidBridge()?.deleteTargetFiles?.(id)
@@ -219,15 +278,17 @@ export const ARDatabase = {
     const db = await getDB();
     await new Promise<void>((resolve) => {
       const tx = db.transaction([STORE_ASSETS], 'readwrite');
-      keys.forEach((k) => tx.objectStore(STORE_ASSETS).delete(k));
+      deleteKeys(tx.objectStore(STORE_ASSETS), keys);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
   },
 
-  async saveAssetBlob(id: string, fileData: FileData, fileName: string, sha?: string): Promise<void> {
+  /** `waitForBackup: false` returns once the file is in IndexedDB; the native backup follows. */
+  async saveAssetBlob(id: string, fileData: FileData, fileName: string, sha?: string, waitForBackup = true): Promise<void> {
     await putAsset(id, fileData, fileName, 'glb', sha);
-    await saveNativeCopy('model', id, fileData);
+    const backup = saveNativeCopy('model', id, fileData);
+    if (waitForBackup) await backup;
   },
 
   getAssetBlob(id: string): Promise<FileData | null> {
@@ -242,9 +303,19 @@ export const ARDatabase = {
     return getAssetSha(audioKey(id, lang));
   },
 
-  async saveAudioBlob(id: string, fileData: FileData, fileName: string, sha?: string, lang: VoiceLang = 'id'): Promise<void> {
+  async saveAudioBlob(id: string, fileData: FileData, fileName: string, sha?: string, lang: VoiceLang = 'id', waitForBackup = true): Promise<void> {
     await putAsset(audioKey(id, lang), fileData, fileName, 'audio', sha);
-    await saveNativeCopy('audio', nativeAudioId(id, lang), fileData);
+    const backup = saveNativeCopy('audio', nativeAudioId(id, lang), fileData);
+    if (waitForBackup) await backup;
+  },
+
+  /** Native (app-private) backup copy of a model, when IndexedDB lost it. */
+  nativeModelUrl(id: string): string | null {
+    return getAndroidBridge()?.getModelUrl?.(id) || null;
+  },
+
+  nativeAudioUrl(id: string, lang: VoiceLang = 'id'): string | null {
+    return getAndroidBridge()?.getAudioUrl?.(nativeAudioId(id, lang)) || null;
   },
 
   getAudioBlob(id: string, lang: VoiceLang = 'id'): Promise<FileData | null> {

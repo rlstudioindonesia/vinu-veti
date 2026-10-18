@@ -202,6 +202,11 @@ export async function loadGlbCached(
   return { scene: cloneSkinned(scene) as THREE.Group, animations };
 }
 
+/** Forgets the cached versions of one model file (its newer version was just downloaded). */
+export function forgetModel(fileId: string) {
+  for (const key of [...modelCache.keys()]) if (key.startsWith(`${fileId}|`)) modelCache.delete(key);
+}
+
 /** Forgets every cached model (e.g. after content was updated). */
 export function clearModelCache() {
   modelCache.clear();

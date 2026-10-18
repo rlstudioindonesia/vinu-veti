@@ -60,6 +60,9 @@ export interface ContentManifest {
 
 const BUNDLED_BASE = new URL('./content/', window.location.href).href;
 const APPLIED_KEY = 'vv_content_pack_applied';
+// Version (updatedAt) of the online sticker list installed on this phone, set as soon as the list is
+// installed, even when some files are still missing
+const REMOTE_LIST_KEY = 'vv_content_remote_list';
 
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
   const ctrl = new AbortController();
@@ -232,46 +235,130 @@ async function download(url: string, size?: number): Promise<ArrayBuffer> {
   return job;
 }
 
-/** Downloads a mirror job, checks it against the published SHA-256 and stores it on the phone. */
-async function mirrorFile(job: MirrorJob): Promise<ArrayBuffer> {
+/** Same file locations and versions (also fills in SHA/size for stickers stored by older versions). */
+function sameFiles(a: ARQRTarget, b: ARQRTarget): boolean {
+  const files = (t: ARQRTarget) =>
+    JSON.stringify([
+      t.customGlbUrl,
+      t.customGlbSha,
+      t.customGlbSize,
+      (t.assets || []).map((x) => [x.id, x.url, x.sha, x.size]),
+      VOICE_LANGS.map((l) => [t.voices?.[l]?.url, t.voices?.[l]?.sha, t.voices?.[l]?.size]),
+    ]);
+  return files(a) === files(b);
+}
+
+// Files shown from an older local copy because the new version could not be downloaded (offline).
+// When the new version arrives, the AR view is told to load it ('vv-file-updated' event).
+const servedOutdated = new Set<string>();
+
+/**
+ * Downloads a mirror job, checks it against the published SHA-256 and stores it on the phone.
+ * `waitForBackup: false` (AR view) returns as soon as the file can be shown; the native backup copy
+ * is written right after.
+ */
+const mirroring = new Map<string, Promise<ArrayBuffer>>();
+
+async function mirrorFile(job: MirrorJob, waitForBackup = true): Promise<ArrayBuffer> {
+  // The same file requested twice at once (AR view + sync, or prefetch + playback): stored once
+  const id = `${job.key}|${job.url}`;
+  let running = mirroring.get(id);
+  if (!running) {
+    running = mirrorFileNow(job, waitForBackup).finally(() => mirroring.delete(id));
+    mirroring.set(id, running);
+  }
+  return running;
+}
+
+async function mirrorFileNow(job: MirrorJob, waitForBackup: boolean): Promise<ArrayBuffer> {
   const data = await download(job.url, job.size);
   // Integrity check: the bytes (joined from parts for big files) must match the published index
   const sha = await sha256Hex(data);
   if (job.sha && sha !== job.sha) throw new Error(`File rusak saat diunduh (SHA tidak cocok): ${job.url}`);
-  if (job.kind === 'model') await ARDatabase.saveAssetBlob(job.id, data, job.name, sha);
-  else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha, job.lang);
+  if (job.kind === 'model') await ARDatabase.saveAssetBlob(job.id, data, job.name, sha, waitForBackup);
+  else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha, job.lang, waitForBackup);
+  if (servedOutdated.delete(job.key)) window.dispatchEvent(new CustomEvent('vv-file-updated', { detail: job.key }));
   return data;
 }
 
+function isOnlineUrl(url: string | undefined): url is string {
+  return !!url && !!REMOTE_CONTENT_BASE && url.startsWith(REMOTE_CONTENT_BASE);
+}
+
 /**
- * Model source for the AR view. A sticker scanned before its online file was mirrored is downloaded
- * once (fast, in parallel pieces), saved on the phone right away and shown from memory: the next scan
- * (also offline) loads it from local storage.
+ * Best source of an online file for the AR view, so that anything seen once also works offline:
+ * 1. the local copy when it is up to date (SHA-256 matches the published one);
+ * 2. otherwise (missing or outdated) download it once, fast and shared with the background sync,
+ *    save it on the phone and show it;
+ * 3. no internet / download failed: an older local copy, then the native backup copy, is still
+ *    better than nothing (replaced as soon as the new version is downloaded).
  */
-export async function resolveModelForAR(target: ARQRTarget, index: number): Promise<Blob | ArrayBuffer | string | null> {
-  const source = await resolveModelSource(target, index);
-  if (typeof source !== 'string' || source.startsWith(BUNDLED_BASE) || !/^https?:/i.test(source)) return source;
-  const entry = getModelEntries(target)[index];
-  if (!entry || entry.url !== source || !REMOTE_CONTENT_BASE || !source.startsWith(REMOTE_CONTENT_BASE)) return source;
-  const asset = index > 0 ? target.assets?.[index - 1] : undefined;
-  const job: MirrorJob = {
-    key: entry.id,
-    id: entry.id,
-    kind: 'model',
-    url: source,
-    sha: index > 0 ? asset?.sha : target.customGlbSha,
-    size: index > 0 ? asset?.size : target.customGlbSize,
-    name: (index > 0 ? asset?.fileName : target.customGlbFileName) || `${entry.id}.glb`,
-  };
-  try {
-    return await mirrorFile(job);
-  } catch (err) {
-    console.warn('Model download failed:', source, err);
-    // Unknown size (older manifest, file stored whole): let the loader try it directly as before.
-    // Otherwise report a load failure (not "missing": the file exists, the connection failed).
-    if (!job.size && !(err instanceof HttpError)) return source;
-    throw err instanceof Error ? err : new Error('failed');
+async function resolveForAR(
+  job: MirrorJob,
+  stored: () => Promise<Blob | ArrayBuffer | null>,
+  backupUrl: () => string | null
+): Promise<Blob | ArrayBuffer | string | null> {
+  const [local, localSha] = await Promise.all([stored(), storedSha(job)]);
+  if (local && (!job.sha || localSha === job.sha)) return local;
+  let failure: unknown = null;
+  if (navigator.onLine !== false) {
+    try {
+      return await mirrorFile(job, false);
+    } catch (err) {
+      console.warn('Download failed, using what is on the phone:', job.url, err);
+      failure = err;
+    }
   }
+  const fallback = local ?? backupUrl();
+  if (fallback) {
+    servedOutdated.add(job.key);
+    return fallback;
+  }
+  // Unknown size (older manifest, file stored whole): let the loader / player try it directly
+  if (navigator.onLine !== false && !job.size && !(failure instanceof HttpError)) return job.url;
+  if (job.kind === 'audio') return null;
+  // A load failure, not "missing": the file exists, the connection failed
+  throw failure instanceof Error ? failure : new Error('offline');
+}
+
+/** Model source for the AR view (see resolveForAR). */
+export async function resolveModelForAR(target: ARQRTarget, index: number): Promise<Blob | ArrayBuffer | string | null> {
+  const entry = getModelEntries(target)[index];
+  if (!entry || !isOnlineUrl(entry.url)) return resolveModelSource(target, index);
+  const asset = index > 0 ? target.assets?.[index - 1] : undefined;
+  return resolveForAR(
+    {
+      key: entry.id,
+      id: entry.id,
+      kind: 'model',
+      url: entry.url,
+      sha: index > 0 ? asset?.sha : target.customGlbSha,
+      size: index > 0 ? asset?.size : target.customGlbSize,
+      name: (index > 0 ? asset?.fileName : target.customGlbFileName) || `${entry.id}.glb`,
+    },
+    () => ARDatabase.getAssetBlob(entry.id),
+    () => ARDatabase.nativeModelUrl(entry.id)
+  );
+}
+
+/** Voice source for the AR view (see resolveForAR): a voice heard once also plays offline. */
+export async function resolveAudioForAR(target: ARQRTarget, lang: VoiceLang): Promise<Blob | ArrayBuffer | string | null> {
+  const voice = voiceOf(target, lang);
+  if (!voice || !isOnlineUrl(voice.url)) return resolveAudioSource(target, lang);
+  return resolveForAR(
+    {
+      key: audioKey(target.id, lang),
+      id: target.id,
+      kind: 'audio',
+      lang,
+      url: voice.url,
+      sha: voice.sha,
+      size: voice.size,
+      name: voice.name || 'audio',
+    },
+    () => ARDatabase.getAudioBlob(target.id, lang),
+    () => ARDatabase.nativeAudioUrl(target.id, lang)
+  );
 }
 
 /** Asks the browser not to clear the downloaded content when the phone runs low on space. */
@@ -309,7 +396,7 @@ function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
       size: a.size,
     })),
     voices: Object.fromEntries(
-      Object.entries(packVoices(p)).map(([lang, f]) => [lang, { name: f!.name || 'audio', url: new URL(f!.file, base).href }])
+      Object.entries(packVoices(p)).map(([lang, f]) => [lang, { name: f!.name || 'audio', url: new URL(f!.file, base).href, sha: f!.sha, size: f!.size }])
     ) as Partial<Record<VoiceLang, VoiceFile>>,
     source: 'pack',
     createdAt,
@@ -375,14 +462,19 @@ export async function syncContentPack(
   ]);
 
   let applied: string | null = null;
+  let remoteList = 0;
   try {
     applied = localStorage.getItem(APPLIED_KEY);
+    remoteList = Number(localStorage.getItem(REMOTE_LIST_KEY)) || (applied?.startsWith('remote:') ? Number(applied.slice(7)) || 1 : 0);
   } catch {
     // ignore
   }
   // Server unreachable (offline) but this phone already has online content: keep it as it is.
-  // Falling back to the (older) bundled pack here would delete the mirrored stickers.
-  if (!remote && REMOTE_CONTENT_BASE && applied?.startsWith('remote:')) return { downloaded: 0, failed: 0 };
+  // Falling back to the (older) bundled pack here would delete the mirrored stickers, also when an
+  // earlier download was incomplete. Only a newer pack inside an updated APK replaces it.
+  if (!remote && REMOTE_CONTENT_BASE && remoteList > 0 && !(bundled && bundled.updatedAt > remoteList)) {
+    return { downloaded: 0, failed: 0 };
+  }
 
   let manifest = bundled;
   let base = BUNDLED_BASE;
@@ -395,7 +487,9 @@ export async function syncContentPack(
 
   const isRemote = base === REMOTE_CONTENT_BASE;
   const stamp = `${isRemote ? 'remote' : 'bundled'}:${manifest.updatedAt}`;
-  if (applied === stamp) return { downloaded: 0, failed: 0 };
+  // Bundled files live in the APK: nothing can go missing. Online files are checked every time
+  // (cheap: only the small SHA rows are read), so a file lost from storage is downloaded again.
+  if (!isRemote && applied === stamp) return { downloaded: 0, failed: 0 };
 
   const existing = await ARDatabase.getAllTargets();
   const byId = new Map(existing.map((t) => [t.id, t]));
@@ -440,11 +534,10 @@ export async function syncContentPack(
         const sha = await storedSha(job);
         if (!sha || !job.sha || sha !== job.sha) stale.push(job);
       }
-      if (local && local.updatedAt === p.updatedAt && stale.length === 0) continue;
-      // Drop outdated copies first, so an old model is never shown; until the new file is mirrored
-      // the app streams it from the online URL.
-      await ARDatabase.deleteAssetKeys(stale.map((j) => j.key));
+      // Outdated copies are kept until the new file is stored: offline the sticker still shows its
+      // previous version instead of nothing (online the AR view fetches the new one, see resolveForAR)
       queue.push(...stale);
+      if (local && local.updatedAt === p.updatedAt && sameFiles(local, target)) continue;
     } else {
       if (local && local.updatedAt === p.updatedAt) continue;
       // Bundled files live in the APK; drop mirrored copies so the bundled ones are used
@@ -463,6 +556,13 @@ export async function syncContentPack(
     }
   }
 
+  if (isRemote) {
+    try {
+      localStorage.setItem(REMOTE_LIST_KEY, String(manifest.updatedAt));
+    } catch {
+      // ignore
+    }
+  }
   if (changed) onMetadataChanged?.();
 
   // Mirror changed files, two at a time (each one in parallel pieces; memory stays low on cheap

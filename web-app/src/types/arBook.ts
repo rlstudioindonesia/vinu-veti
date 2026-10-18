@@ -4,6 +4,8 @@ export const VOICE_LANGS: VoiceLang[] = ['id', 'en', 'tl'];
 export interface VoiceFile {
   name: string; // original file name
   url?: string; // bundled / online location (used when no local copy exists)
+  sha?: string; // SHA-256 and size of the published online file (content packs only)
+  size?: number;
 }
 
 export interface ARQRTargetAsset {

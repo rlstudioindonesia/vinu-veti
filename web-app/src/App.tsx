@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { ARQRTarget } from './types/arBook';
-import { ARDatabase, resolveAudioSource } from './services/db';
-import { syncContentPack } from './services/contentPack';
+import { ARDatabase } from './services/db';
+import { resolveAudioForAR, syncContentPack } from './services/contentPack';
 import { getCloudUser } from './services/cloudPublish';
 import { QRAnchor } from './services/barcodeScanner';
 import { soundService } from './services/soundService';
@@ -158,6 +158,9 @@ export default function App() {
 
     if (activeTargetRef.current?.id !== matched.id) {
       soundService.playScanBeep();
+      // Fetch (and keep on the phone) the narration while the model loads, so it is ready when the
+      // character appears and also plays offline next time
+      resolveAudioForAR(matched, langRef.current).catch(() => undefined);
         setActiveTarget(matched);
     }
     setQrAnchor(anchor);
@@ -171,7 +174,7 @@ export default function App() {
   const handleModelShown = useCallback(() => {
     const t = activeTargetRef.current;
     if (!t || t.autoPlayAudio === false) return;
-    resolveAudioSource(t, langRef.current).then((src) => {
+    resolveAudioForAR(t, langRef.current).then((src) => {
       if (src && activeTargetRef.current?.id === t.id) soundService.playManualAudio(src);
     });
   }, []);

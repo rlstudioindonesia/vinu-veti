@@ -4,7 +4,7 @@ import { ARQRTarget } from '../../types/arBook';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries } from '../../services/db';
 import { downloadProgress, resolveModelForAR } from '../../services/contentPack';
-import { loadGlbCached, normalizeModel } from '../../utils/modelLoader';
+import { forgetModel, loadGlbCached, normalizeModel } from '../../utils/modelLoader';
 import { qrTracker } from '../../services/qrTracker';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
@@ -601,6 +601,18 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       cancelled = true;
     };
   }, [target, retry, activateStep, prepareForGpu]);
+
+  // A model shown from an older copy on the phone (no internet at the time): its new version was
+  // downloaded meanwhile, show that one
+  useEffect(() => {
+    const onUpdated = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      forgetModel(id);
+      if (target && getModelEntries(target).some((m) => m.id === id)) setRetry((r) => r + 1);
+    };
+    window.addEventListener('vv-file-updated', onUpdated);
+    return () => window.removeEventListener('vv-file-updated', onUpdated);
+  }, [target]);
 
   useEffect(() => {
     if (loadError !== 'offline' && loadError !== 'failed') return;
