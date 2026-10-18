@@ -31,6 +31,8 @@ const QRStickerPrintModal = lazy(() =>
 // scanner often misses the QR (motion blur); ThreeCanvas keeps the model on the sticker using the
 // gyroscope in the meantime.
 const QR_LOST_TIMEOUT = 2500;
+// Content files that failed to download are tried again after this long while the app stays open
+const SYNC_RETRY_MS = 2 * 60 * 1000;
 
 // Admin tools are in every build. In the Play Store build the entry is hidden (tap the "VINU & VETI"
 // badge 7 times) and protected by the Supabase admin account. `npm run dev` and `npm run build:admin`
@@ -72,6 +74,20 @@ export default function App() {
     return [targets[i + 1], targets[i + 2], targets[i - 1]].filter((t): t is ARQRTarget => !!t);
   }, [activeTarget, targets]);
 
+  // App sent to the background (phone locked, other app): the narration stops instead of playing on
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') soundService.stopAudio();
+    };
+    const onPause = () => soundService.stopAudio();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('vv-app-pause', onPause);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('vv-app-pause', onPause);
+    };
+  }, []);
+
   // Content updated while a sticker is shown (sync finished): switch to its new version, so the
   // updated model is loaded; a sticker that was unpublished is closed
   useEffect(() => {
@@ -107,16 +123,26 @@ export default function App() {
     // Runs at start, when the connection comes back and when the app returns to the foreground.
     let running = false;
     let lastRun = 0;
-    const sync = async () => {
-      if (running || Date.now() - lastRun < 60000) return;
+    // A request while a sync runs (e.g. the connection came back) is not lost: it runs right after
+    let again = false;
+    let retryTimer: number | undefined;
+    const sync = async (force = false) => {
+      if (running) {
+        if (force) again = true;
+        return;
+      }
+      if (!force && Date.now() - lastRun < 60000) return;
+      window.clearTimeout(retryTimer);
       running = true;
       lastRun = Date.now();
+      let failed = 0;
       try {
         const result = await syncContentPack(
           () => loadTargetsFromDB(),
           (p) => setContentStatus({ phase: 'downloading', ...p })
         );
         await loadTargetsFromDB();
+        failed = result.failed;
         if (result.failed > 0) setContentStatus({ phase: 'partial', done: 0, total: 0 });
         else if (result.downloaded > 0) {
           setContentStatus({ phase: 'ready', done: 0, total: 0 });
@@ -127,16 +153,26 @@ export default function App() {
       } finally {
         running = false;
       }
+      if (again) {
+        again = false;
+        sync(true);
+      } else if (failed > 0) {
+        // Some files could not be downloaded: try again in a while, also while the app stays open
+        retryTimer = window.setTimeout(() => sync(true), SYNC_RETRY_MS);
+      }
     };
     const onVisible = () => {
       if (document.visibilityState === 'visible') sync();
     };
+    // Back online: always sync now (the connection was missing, so the last attempt did nothing)
+    const onOnline = () => sync(true);
 
-    loadTargetsFromDB().then(sync);
-    window.addEventListener('online', sync);
+    loadTargetsFromDB().then(() => sync(true));
+    window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      window.removeEventListener('online', sync);
+      window.clearTimeout(retryTimer);
+      window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [loadTargetsFromDB]);

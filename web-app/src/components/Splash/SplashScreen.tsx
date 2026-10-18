@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import { MASCOT_SRC, Cloud, Star, Spark, Hills, Leaf, SKY_GRADIENT } from '../Common/Scenery';
@@ -13,6 +13,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onLoaded }) => {
   const { t } = useI18n();
   const [progress, setProgress] = useState<number>(8);
   const [mascotOk, setMascotOk] = useState<boolean>(true);
+  // The parent passes a new callback on every render (e.g. each content download step): the timing
+  // below must not restart because of it, or the splash stays up while content downloads
+  const onLoadedRef = useRef(onLoaded);
+  onLoadedRef.current = onLoaded;
 
   useEffect(() => {
     let cancelled = false;
@@ -33,7 +37,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onLoaded }) => {
         if (cancelled) return;
         window.clearInterval(tick);
         setProgress(100);
-        window.setTimeout(() => !cancelled && onLoaded(), 300);
+        window.setTimeout(() => !cancelled && onLoadedRef.current(), 300);
       }, wait);
     });
 
@@ -41,7 +45,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ onLoaded }) => {
       cancelled = true;
       window.clearInterval(tick);
     };
-  }, [onLoaded]);
+  }, []);
 
   return (
     <div

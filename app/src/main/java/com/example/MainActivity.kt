@@ -104,6 +104,23 @@ import java.io.File
  * drift). WebView's own `devicemotion` is missing or unreliable on many phones; this gives the AR view
  * an accurate rotation with known axes (x right, y up, z out of the screen), polled every frame.
  */
+/**
+ * The app's WebView, so the activity can tell the page when the app goes to the background and comes
+ * back ('vv-app-pause' / 'vv-app-resume' events): the AR view then releases and reopens the camera,
+ * which Android takes away from background apps (otherwise the picture stays black on return).
+ */
+object AppWebView {
+  private var ref: java.lang.ref.WeakReference<WebView>? = null
+
+  fun set(webView: WebView) {
+    ref = java.lang.ref.WeakReference(webView)
+  }
+
+  fun dispatch(event: String) {
+    ref?.get()?.evaluateJavascript("window.dispatchEvent(new Event('$event'))", null)
+  }
+}
+
 object RotationSensor : SensorEventListener {
   @Volatile private var latest: String = ""
   private var manager: SensorManager? = null
@@ -398,10 +415,12 @@ class MainActivity : ComponentActivity() {
   override fun onResume() {
     super.onResume()
     RotationSensor.start(this)
+    AppWebView.dispatch("vv-app-resume")
   }
 
   override fun onPause() {
     RotationSensor.stop()
+    AppWebView.dispatch("vv-app-pause")
     super.onPause()
   }
 
@@ -610,6 +629,7 @@ fun ARBookScreen(
             // Load the web app index.html
             loadUrl("https://appassets.androidplatform.net/assets/www/index.html")
             webViewRef = this
+            AppWebView.set(this)
           }
         },
         update = { webView ->

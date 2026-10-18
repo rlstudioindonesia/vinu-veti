@@ -331,7 +331,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setRemovedVoices([...removedVoices, lang]);
     const voices = { ...(editingTarget.voices || {}) };
     delete voices[lang];
-    setEditingTarget({ ...editingTarget, voices });
+    // Stickers from before languages keep their only voice in legacy fields (= Indonesian): clear
+    // them too, otherwise the removed voice still plays
+    const legacy = lang === 'id' ? { hasCustomAudio: false, customAudioName: undefined, audioUrl: undefined } : {};
+    setEditingTarget({ ...editingTarget, ...legacy, voices });
   };
 
   const handleVoicePreview = async (lang: VoiceLang) => {
