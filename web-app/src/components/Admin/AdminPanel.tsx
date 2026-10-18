@@ -115,6 +115,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return true;
     }
   });
+  // Optional: fewer triangles for the static surroundings of big scenes (characters stay untouched)
+  const [lightenScenery, setLightenScenery] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('vv_lighten_scenery') === 'on';
+    } catch {
+      return false;
+    }
+  });
   const [pendingVoices, setPendingVoices] = useState<Partial<Record<VoiceLang, PendingFile>>>({});
   const [removedVoices, setRemovedVoices] = useState<VoiceLang[]>([]);
   const [playingVoice, setPlayingVoice] = useState<VoiceLang | null>(null);
@@ -210,11 +218,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setCompressing('Mengompres model…');
     try {
       const { compressGlb } = await import('../../utils/glbCompress');
-      const res = await compressGlb(f.data, (msg) => setCompressing(msg));
+      const res = await compressGlb(f.data, (msg) => setCompressing(msg), { simplifyScenery: lightenScenery });
       if (res.after < res.before) {
         const kept = res.textures.filter((t) => t.to === 'unchanged').length;
         showNotice(
           `Model dikompres: ${(res.before / 1048576).toFixed(1)} MB → ${(res.after / 1048576).toFixed(1)} MB, kualitas terjaga` +
+            (res.trianglesAfter < res.trianglesBefore
+              ? `; segitiga ${Math.round(res.trianglesBefore / 1000)}rb → ${Math.round(res.trianglesAfter / 1000)}rb (lebih ringan di HP)`
+              : '') +
             (kept > 0 ? ` (${kept} tekstur dibiarkan asli agar tidak turun kualitas)` : '')
         );
         return { data: res.data, name: f.name };
@@ -700,6 +711,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   />
                   Kompres otomatis file di atas 5 MB (disarankan: lebih ringan untuk HP anak, lolos batas 50 MB)
                 </label>
+                {autoCompress && (
+                  <label className="flex items-center gap-2 text-[10px] text-slate-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={lightenScenery}
+                      onChange={(e) => {
+                        setLightenScenery(e.target.checked);
+                        try {
+                          localStorage.setItem('vv_lighten_scenery', e.target.checked ? 'on' : 'off');
+                        } catch {
+                          // ignore
+                        }
+                      }}
+                      className="accent-emerald-500 rounded"
+                    />
+                    Ringankan lingkungan diorama besar (±25% segitiga lebih sedikit; karakter tetap utuh, detail kecil
+                    lingkungan bisa sedikit lebih halus dari dekat)
+                  </label>
+                )}
                 {compressing && (
                   <div className="flex items-center gap-2 rounded-xl bg-emerald-600/20 px-3 py-2 text-[11px] font-semibold text-emerald-200">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
