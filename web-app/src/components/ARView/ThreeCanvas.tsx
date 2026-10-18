@@ -40,6 +40,14 @@ const TAP_PADDING_PX = 36;
 const TURN_START_PX = 24;
 // Little "jump" when the character is touched
 const BOUNCE_MS = 280;
+// Loading a character never spins forever: shader compilation (it can hang when the GPU runs out of
+// memory) is given this long, and opening + preparing the model (download time not counted) this long
+const COMPILE_TIMEOUT_MS = 5000;
+const LOAD_TIMEOUT_MS = 90000;
+
+function withTimeout<T>(job: Promise<T>, ms: number): Promise<T | 'timeout'> {
+  return Promise.race([job, new Promise<'timeout'>((r) => window.setTimeout(() => r('timeout'), ms))]);
+}
 // Appear (springy pop) / disappear (shrink) animation durations
 const APPEAR_S = 0.42;
 const DISAPPEAR_S = 0.24;
@@ -198,6 +206,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
   const pinchRef = useRef<{ dist: number; base: number } | null>(null);
 
   const [loadingModel, setLoadingModel] = useState<boolean>(false);
+  // What the loading is doing now (shown, so a screenshot tells where a slow phone is stuck)
+  const [loadStage, setLoadStage] = useState<'open' | 'gpu'>('open');
   const [loadPercent, setLoadPercent] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Bumped to load the sticker again after a failed download (internet back, or a tap on the message)
@@ -222,7 +232,21 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
     renderer.setClearColor(0x000000, 0);
-    renderer.domElement.addEventListener('webglcontextlost', (e) => e.preventDefault(), false);
+    // The GPU ran out of memory (model too heavy for this phone): say so instead of an endless
+    // "loading" or an empty picture. When the browser restores the GPU the character is loaded again
+    // once; if it happens again, a tap on the message tries again (no endless lose-reload loop).
+    let gpuLosses = 0;
+    renderer.domElement.addEventListener(
+      'webglcontextlost',
+      (e) => {
+        e.preventDefault();
+        gpuLosses++;
+        setLoadingModel(false);
+        setLoadError('heavy');
+      },
+      false
+    );
+    renderer.domElement.addEventListener('webglcontextrestored', () => gpuLosses <= 1 && setRetry((r) => r + 1), false);
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -517,7 +541,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
     if (!renderer || !camera || !scene) return;
     pivot.visible = true;
     try {
-      await renderer.compileAsync(pivot, camera, scene);
+      // Waits for every shader of the model; on some phones this never finishes when the GPU is out of
+      // memory, so after a while the model is shown anyway (shaders then finish on first draw)
+      await withTimeout(renderer.compileAsync(pivot, camera, scene), COMPILE_TIMEOUT_MS);
       pivot.traverse((o) => {
         const mesh = o as THREE.Mesh;
         const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
@@ -525,7 +551,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
       });
       // Many phone GPU drivers only finish shaders/textures on the first real draw: the render loop
       // draws the model once into a single, invisible pixel so that cost is paid before it appears
-      await new Promise<void>((done) => warmupRef.current.push({ pivot, done }));
+      await withTimeout(new Promise<void>((done) => warmupRef.current.push({ pivot, done })), COMPILE_TIMEOUT_MS);
     } catch (err) {
       console.warn('GPU warm-up skipped:', err);
     }
@@ -569,6 +595,20 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
 
     let cancelled = false;
     setLoadingModel(true);
+    setLoadStage('open');
+    // Watchdog: opening/preparing the main model may not take forever (time spent downloading, which
+    // shows its own percentage, does not count)
+    let mainDone = false;
+    let lastProgress = performance.now();
+    const watchdog = window.setInterval(() => {
+      if (mainDone || cancelled) return window.clearInterval(watchdog);
+      if (downloadProgress(target.customGlbUrl) !== null) lastProgress = performance.now();
+      else if (performance.now() - lastProgress > LOAD_TIMEOUT_MS) {
+        window.clearInterval(watchdog);
+        setLoadingModel(false);
+        setLoadError('heavy');
+      }
+    }, 1000);
     yawRef.current = 0;
     userScaleRef.current = 1;
     const entries = getModelEntries(target);
@@ -610,6 +650,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           }
           // Compile shaders and upload textures before the character pops in, so the appear
           // animation (and the first tap on an extra animation) does not stutter
+          if (i === 0) setLoadStage('gpu');
           await prepareForGpu(pivot);
           if (cancelled) {
             disposeObject(pivot);
@@ -623,7 +664,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           rebuildSteps();
           if (activeVariantRef.current < 0) {
             activateStep(0);
+            mainDone = true;
             setLoadingModel(false);
+            setLoadError(null); // it made it after all (e.g. after the watchdog gave up)
           }
           if (stepsRef.current.length > 1) {
             setShowHint(true);
@@ -631,17 +674,20 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           }
         } catch (err) {
           console.warn('Model load failed:', entries[i]?.id, err);
+          if (i === 0) mainDone = true;
           if (i === 0 && !cancelled) {
             setLoadError(err instanceof Error && err.message === 'missing' ? 'missing' : navigator.onLine === false ? 'offline' : 'failed');
             setLoadingModel(false);
           }
         }
       }
+      mainDone = true;
       if (!cancelled) setLoadingModel(false);
     })();
 
     return () => {
       cancelled = true;
+      window.clearInterval(watchdog);
     };
   }, [target, retry, activateStep, prepareForGpu]);
 
@@ -831,8 +877,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 px-3 py-1.5 rounded-full text-white">
           <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
           <p className="text-[11px] font-semibold text-emerald-300">
-            {tr('loadingModel')}
-            {loadPercent !== null && ` ${loadPercent}%`}
+            {loadPercent !== null ? `${tr('loadingModel')} ${loadPercent}%` : tr(loadStage === 'gpu' ? 'preparingModel' : 'openingModel')}
           </p>
         </div>
       )}
@@ -844,7 +889,17 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/70 px-3 py-1.5 rounded-full text-amber-300 text-[11px] font-semibold"
         >
           <AlertTriangle className="w-3.5 h-3.5" />
-          <span>{tr(loadError === 'missing' ? 'modelMissing' : loadError === 'offline' ? 'modelOffline' : 'modelFailed')}</span>
+          <span>
+            {tr(
+              loadError === 'missing'
+                ? 'modelMissing'
+                : loadError === 'offline'
+                  ? 'modelOffline'
+                  : loadError === 'heavy'
+                    ? 'modelTooHeavy'
+                    : 'modelFailed'
+            )}
+          </span>
           {loadError !== 'missing' && <RotateCw className="w-3.5 h-3.5" />}
         </button>
       )}
