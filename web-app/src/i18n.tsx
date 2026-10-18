@@ -88,6 +88,11 @@ const STRINGS = {
   tryAgain: { id: 'Coba Lagi', en: 'Try Again', tl: 'Subukan Muli' },
   loadingModel: { id: 'Memuat objek 3D...', en: 'Loading 3D object...', tl: 'Nilo-load ang 3D na bagay...' },
   modelMissing: { id: 'Model 3D belum diunggah untuk stiker ini', en: 'No 3D model uploaded for this sticker yet', tl: 'Wala pang 3D model para sa sticker na ito' },
+  modelOffline: {
+    id: 'Model 3D belum terunduh. Sambungkan internet sekali',
+    en: 'The 3D model is not downloaded yet. Connect to the internet once',
+    tl: 'Hindi pa na-download ang 3D model. Kumonekta sa internet nang isang beses',
+  },
   modelFailed: { id: 'Model 3D gagal dimuat', en: 'The 3D model could not be loaded', tl: 'Hindi ma-load ang 3D model' },
   tooDark: { id: 'Terlalu gelap? Nyalakan lampu', en: 'Too dark? Turn on the light', tl: 'Masyadong madilim? Buksan ang ilaw' },
   torchOn: { id: 'Nyalakan lampu', en: 'Turn on light', tl: 'Buksan ang ilaw' },

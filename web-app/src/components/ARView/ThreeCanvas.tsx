@@ -3,12 +3,12 @@ import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { getModelEntries } from '../../services/db';
-import { resolveModelForAR } from '../../services/contentPack';
+import { downloadProgress, resolveModelForAR } from '../../services/contentPack';
 import { loadGlbCached, normalizeModel } from '../../utils/modelLoader';
 import { qrTracker } from '../../services/qrTracker';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
-import { Hand, AlertTriangle } from 'lucide-react';
+import { Hand, AlertTriangle, RotateCw } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import { isLowEndDevice } from '../../utils/platform';
 
@@ -119,6 +119,14 @@ function quadArea(p: Point2[]): number {
 // model's front (+Z) faces the QR's bottom edge, i.e. the reader holding the book.
 const STAND_ON_QR = new THREE.Matrix4().makeRotationX(Math.PI / 2);
 
+// Scratch objects reused by the render loop: no new allocations every frame (on budget phones the
+// garbage collector otherwise causes small, regular stutters)
+const _m1 = new THREE.Matrix4();
+const _m2 = new THREE.Matrix4();
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _q1 = new THREE.Quaternion();
+
 export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onModelShown }) => {
   const { t: tr } = useI18n();
   const onShownRef = useRef(onModelShown);
@@ -168,7 +176,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   const pinchRef = useRef<{ dist: number; base: number } | null>(null);
 
   const [loadingModel, setLoadingModel] = useState<boolean>(false);
+  const [loadPercent, setLoadPercent] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped to load the sticker again after a failed download (internet back, or a tap on the message)
+  const [retry, setRetry] = useState(0);
   const [showHint, setShowHint] = useState<boolean>(false);
 
   // Scene setup + render loop
@@ -320,9 +331,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
             baseMatrixRef.current = (baseMatrixRef.current ?? new THREE.Matrix4())
               .copy(pose)
               .multiply(STAND_ON_QR)
-              .multiply(new THREE.Matrix4().makeTranslation(0, t.elevationOffset || 0, 0))
-              .multiply(new THREE.Matrix4().makeRotationY(yawRef.current))
-              .multiply(new THREE.Matrix4().makeScale(size, size, size));
+              .multiply(_m1.makeTranslation(0, t.elevationOffset || 0, 0))
+              .multiply(_m1.makeRotationY(yawRef.current))
+              .multiply(_m1.makeScale(size, size, size));
             want = model.children.some((c) => c.visible);
             if (want && !announcedRef.current) {
               announcedRef.current = true;
@@ -340,7 +351,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
         const s = risingRef.current ? easeOutBack(pr) : smoothstep(pr);
         if (baseMatrixRef.current && pr > 0.001) {
           model.matrixAutoUpdate = false;
-          model.matrix.copy(baseMatrixRef.current).multiply(new THREE.Matrix4().makeScale(s, s, s));
+          model.matrix.copy(baseMatrixRef.current).multiply(_m1.makeScale(s, s, s));
           model.visible = true;
         } else {
           model.visible = false;
@@ -351,10 +362,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       let at: [number, number] | null = null;
       let rq: number[] | null = null;
       if (model?.visible) {
-        const qq = new THREE.Quaternion();
-        model.matrix.decompose(new THREE.Vector3(), qq, new THREE.Vector3());
-        rq = qq.toArray();
-        const p0 = new THREE.Vector3().setFromMatrixPosition(model.matrix).project(camera);
+        model.matrix.decompose(_v1, _q1, _v2);
+        rq = _q1.toArray();
+        const p0 = _v1.setFromMatrixPosition(model.matrix).project(camera);
         at = [((p0.x + 1) / 2) * (container.clientWidth || window.innerWidth), ((1 - p0.y) / 2) * (container.clientHeight || window.innerHeight)];
       }
       (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length, at, rq, dist: stabilizerRef.current.distance(), track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
@@ -371,7 +381,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
         }
         o.mixer?.update(delta);
         const sc = 1 - smoothstep(k);
-        o.group.matrix.copy(o.base).multiply(new THREE.Matrix4().makeScale(sc, sc, sc));
+        o.group.matrix.copy(o.base).multiply(_m2.makeScale(sc, sc, sc));
         return true;
       });
 
@@ -579,7 +589,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
         } catch (err) {
           console.warn('Model load failed:', entries[i]?.id, err);
           if (i === 0 && !cancelled) {
-            setLoadError(err instanceof Error && err.message === 'missing' ? 'missing' : 'failed');
+            setLoadError(err instanceof Error && err.message === 'missing' ? 'missing' : navigator.onLine === false ? 'offline' : 'failed');
             setLoadingModel(false);
           }
         }
@@ -590,7 +600,28 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
     return () => {
       cancelled = true;
     };
-  }, [target, activateStep, prepareForGpu]);
+  }, [target, retry, activateStep, prepareForGpu]);
+
+  useEffect(() => {
+    if (loadError !== 'offline' && loadError !== 'failed') return;
+    const again = () => setRetry((r) => r + 1);
+    window.addEventListener('online', again);
+    return () => window.removeEventListener('online', again);
+  }, [loadError]);
+
+  // Download progress of the main model while it is fetched from the internet
+  useEffect(() => {
+    if (!loadingModel || !target) {
+      setLoadPercent(null);
+      return;
+    }
+    const url = target.customGlbUrl;
+    const timer = window.setInterval(() => {
+      const p = downloadProgress(url);
+      setLoadPercent(p === null ? null : Math.round(p * 100));
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, [loadingModel, target]);
 
   // Touching the character: next animation (next clip / next uploaded .glb of the same QR)
   // Only when the sticker has more than one animation; otherwise touching does nothing at all.
@@ -717,15 +748,23 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
       {loadingModel && qrAnchor && (
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/60 px-3 py-1.5 rounded-full text-white">
           <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-          <p className="text-[11px] font-semibold text-emerald-300">{tr('loadingModel')}</p>
+          <p className="text-[11px] font-semibold text-emerald-300">
+            {tr('loadingModel')}
+            {loadPercent !== null && ` ${loadPercent}%`}
+          </p>
         </div>
       )}
 
       {loadError && qrAnchor && (
-        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/70 px-3 py-1.5 rounded-full text-amber-300 text-[11px] font-semibold">
+        <button
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={() => loadError !== 'missing' && setRetry((r) => r + 1)}
+          className="absolute bottom-24 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-black/70 px-3 py-1.5 rounded-full text-amber-300 text-[11px] font-semibold"
+        >
           <AlertTriangle className="w-3.5 h-3.5" />
-          <span>{tr(loadError === 'missing' ? 'modelMissing' : 'modelFailed')}</span>
-        </div>
+          <span>{tr(loadError === 'missing' ? 'modelMissing' : loadError === 'offline' ? 'modelOffline' : 'modelFailed')}</span>
+          {loadError !== 'missing' && <RotateCw className="w-3.5 h-3.5" />}
+        </button>
       )}
 
       {debugText && (

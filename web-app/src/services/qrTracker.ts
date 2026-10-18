@@ -163,6 +163,11 @@ class QrTracker {
 
   private frame(captureTime: number, mediaTime: number) {
     const v = this.video;
+    // A frame the worker never answered (it was restarted / crashed) must not stop tracking for good
+    if (this.pending.size > 0) {
+      const t = performance.now();
+      for (const [id, p] of this.pending) if (t - p.grabbed > 1000) this.pending.delete(id);
+    }
     // One frame at a time: when the phone is busy, frames are skipped instead of piling up
     if (!v || this.pending.size > 0 || v.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !v.videoWidth) return;
     const w = TRACK_W;

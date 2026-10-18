@@ -63,6 +63,20 @@ export default function App() {
   const activeTargetRef = useRef<ARQRTarget | null>(null);
   activeTargetRef.current = activeTarget;
   const qrLossTimerRef = useRef<number | null>(null);
+
+  // Content updated while a sticker is shown (sync finished): switch to its new version, so the
+  // updated model is loaded; a sticker that was unpublished is closed
+  useEffect(() => {
+    const active = activeTargetRef.current;
+    if (!active) return;
+    const fresh = targets.find((t) => t.id === active.id);
+    if (!fresh) {
+      setActiveTarget(null);
+      setQrAnchor(null);
+    } else if (fresh.updatedAt !== active.updatedAt) {
+      setActiveTarget(fresh);
+    }
+  }, [targets]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Mirroring of online content to the phone (shown on the home screen)

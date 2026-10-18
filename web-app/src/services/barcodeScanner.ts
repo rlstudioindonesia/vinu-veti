@@ -47,6 +47,8 @@ const ROI_SCAN_WIDTH = 560;
 // frames are contrast-stretched before decoding
 const DARK_LEVEL = 70;
 const BRIGHTNESS_EVERY_MS = 400;
+// In the dark, ZXing helps the native detector at most this often (it runs on the main thread)
+const DARK_ASSIST_EVERY_MS = 250;
 
 /**
  * Stretches the brightness range of a dark / low-contrast frame to the full 0-255 (ignoring the
@@ -146,7 +148,7 @@ export class BarcodeScannerService {
   // Low light: measured on a tiny copy of the frame now and then
   private probe: HTMLCanvasElement | null = null;
   private brightnessAt = 0;
-  private nativeMisses = 0;
+  private darkAssistAt = 0;
   /** Average brightness of the camera picture (0-255). */
   public brightness = 255;
 
@@ -302,6 +304,7 @@ export class BarcodeScannerService {
     const mediaTime = videoElement.currentTime;
     this.measureBrightness(videoElement);
     const dark = this.isDark;
+    let assisting = false;
 
     // 1. Native BarcodeDetector (fast, available in most Android WebViews)
     const detector = await this.getNativeDetector();
@@ -327,10 +330,11 @@ export class BarcodeScannerService {
             },
           };
         }
-        // In a dark room the native detector often sees nothing: every other miss, ZXing gets a
+        // In a dark room the native detector often sees nothing: now and then ZXing gets a
         // contrast-enhanced copy of the frame below
-        this.nativeMisses++;
-        if (!dark || this.nativeMisses % 2 === 1) return null;
+        if (!dark || capturedAt - this.darkAssistAt < DARK_ASSIST_EVERY_MS) return null;
+        this.darkAssistAt = capturedAt;
+        assisting = true;
       } catch {
         // Detector failed on this device, permanently fall back to ZXing
         this.nativeDetector = null;
@@ -348,8 +352,9 @@ export class BarcodeScannerService {
           return { x, y, w: Math.min(vW, roi.x + roi.w + pad) - x, h: Math.min(vH, roi.y + roi.h + pad) - y };
         })()
       : { x: 0, y: 0, w: vW, h: vH };
-    // After a miss, try the next frame at full resolution (small or tilted QRs need the detail)
-    const scale = this.fullResNext ? 1 : Math.min(1, (roi ? ROI_SCAN_WIDTH : SCAN_WIDTH) / src.w);
+    // After a miss, try the next frame at full resolution (small or tilted QRs need the detail).
+    // Not when only assisting the native detector: that has to stay light.
+    const scale = this.fullResNext && !assisting ? 1 : Math.min(1, (roi ? ROI_SCAN_WIDTH : SCAN_WIDTH) / src.w);
     const cW = Math.max(1, Math.round(src.w * scale));
     const cH = Math.max(1, Math.round(src.h * scale));
     if (!this.canvas) this.canvas = document.createElement('canvas');
@@ -382,7 +387,6 @@ export class BarcodeScannerService {
 
       this.lastRegion = { x: minX, y: minY, w: side, h: side, t: capturedAt };
       this.lastMethod = 'ZXing';
-      this.nativeMisses = 0;
       this.fullResNext = false;
       return {
         text: result.getText(),
@@ -400,8 +404,10 @@ export class BarcodeScannerService {
         },
       };
     } catch {
-      this.lastRegion = null; // lost it: scan the whole frame next time
-      this.fullResNext = !this.fullResNext && scale < 1;
+      if (!assisting) {
+        this.lastRegion = null; // lost it: scan the whole frame next time
+        this.fullResNext = !this.fullResNext && scale < 1;
+      }
       return null; // No QR in this frame
     } finally {
       this.zxingReader.reset();

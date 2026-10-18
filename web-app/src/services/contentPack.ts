@@ -98,10 +98,16 @@ async function fetchBytes(url: string, timeoutMs: number, range?: [number, numbe
       cache: 'no-store',
       headers: range ? { Range: `bytes=${range[0]}-${range[1] - 1}` } : undefined,
     });
-    if (!res.ok) throw new Error(`Download gagal (${res.status}): ${url}`);
+    if (!res.ok) throw new HttpError(res.status, url);
     return { status: res.status, data: new Uint8Array(await res.arrayBuffer()) };
   } finally {
     window.clearTimeout(timer);
+  }
+}
+
+class HttpError extends Error {
+  constructor(public status: number, url: string) {
+    super(`Download gagal (${status}): ${url}`);
   }
 }
 
@@ -110,7 +116,9 @@ async function withRetries<T>(job: () => Promise<T>): Promise<T> {
     try {
       return await job();
     } catch (err) {
-      if (attempt >= SEGMENT_RETRIES) throw err;
+      // Retrying does not help when the file is not there (4xx) or the phone is offline
+      const permanent = err instanceof HttpError && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429;
+      if (attempt >= SEGMENT_RETRIES || permanent || navigator.onLine === false) throw err;
       await new Promise((r) => window.setTimeout(r, 800 * attempt));
     }
   }
@@ -134,26 +142,44 @@ async function runLimited(jobs: Array<() => Promise<void>>, limit: number): Prom
   if (failure) throw failure;
 }
 
+// Bytes received so far per running download (for the "loading 3D object… 40 %" indicator)
+const received = new Map<string, { done: number; total: number }>();
+
+/** Progress (0-1) of the download of `url`, or null when it is not being downloaded. */
+export function downloadProgress(url: string | undefined): number | null {
+  const r = url ? received.get(url) : undefined;
+  return r && r.total > 0 ? Math.min(1, r.done / r.total) : null;
+}
+
+function addReceived(url: string, bytes: number) {
+  const r = received.get(url);
+  if (r) r.done += bytes;
+}
+
 /** Downloads one stored file (`size` bytes known) into `out` at `offset`, in parallel byte ranges. */
-async function downloadInto(url: string, size: number, out: Uint8Array, offset: number): Promise<void> {
+async function downloadInto(url: string, size: number, out: Uint8Array, offset: number, owner: string): Promise<void> {
   if (size <= SEGMENT_SIZE) {
     const { data } = await withRetries(() => fetchBytes(url, 180000));
     if (data.byteLength !== size) throw new Error(`Ukuran file tidak cocok: ${url}`);
     out.set(data, offset);
+    addReceived(owner, size);
     return;
   }
   // First piece also tells whether the server supports ranges (206); otherwise it sent the whole file.
   // An older WebView that refuses the Range header falls back to one plain download.
-  const first = await withRetries(() => fetchBytes(url, 180000, [0, SEGMENT_SIZE])).catch(() =>
-    withRetries(() => fetchBytes(url, 300000))
-  );
+  const first = await withRetries(() => fetchBytes(url, 180000, [0, SEGMENT_SIZE])).catch((err) => {
+    if ((err instanceof HttpError && err.status !== 416) || navigator.onLine === false) throw err;
+    return withRetries(() => fetchBytes(url, 300000));
+  });
   if (first.status !== 206) {
     if (first.data.byteLength !== size) throw new Error(`Ukuran file tidak cocok: ${url}`);
     out.set(first.data, offset);
+    addReceived(owner, size);
     return;
   }
   if (first.data.byteLength !== SEGMENT_SIZE) throw new Error(`Ukuran file tidak cocok: ${url}`);
   out.set(first.data, offset);
+  addReceived(owner, SEGMENT_SIZE);
   const jobs: Array<() => Promise<void>> = [];
   for (let start = SEGMENT_SIZE; start < size; start += SEGMENT_SIZE) {
     const end = Math.min(size, start + SEGMENT_SIZE);
@@ -161,6 +187,7 @@ async function downloadInto(url: string, size: number, out: Uint8Array, offset: 
       const { status, data } = await withRetries(() => fetchBytes(url, 180000, [start, end]));
       if (status !== 206 || data.byteLength !== end - start) throw new Error(`Ukuran file tidak cocok: ${url}`);
       out.set(data, offset + start);
+      addReceived(owner, end - start);
     });
   }
   await runLimited(jobs, PARALLEL_SEGMENTS);
@@ -176,13 +203,18 @@ async function downloadNow(url: string, size?: number): Promise<ArrayBuffer> {
   // Big files are stored online in parts (see CHUNK_SIZE)
   const out = new Uint8Array(size);
   const parts = partCount(size);
-  if (parts === 0) {
-    await downloadInto(url, size, out, 0);
-  } else {
-    for (let i = 0; i < parts; i++) {
-      const start = i * CHUNK_SIZE;
-      await downloadInto(`${url}.part${i}`, Math.min(CHUNK_SIZE, size - start), out, start);
+  received.set(url, { done: 0, total: size });
+  try {
+    if (parts === 0) {
+      await downloadInto(url, size, out, 0, url);
+    } else {
+      for (let i = 0; i < parts; i++) {
+        const start = i * CHUNK_SIZE;
+        await downloadInto(`${url}.part${i}`, Math.min(CHUNK_SIZE, size - start), out, start, url);
+      }
     }
+  } finally {
+    received.delete(url);
   }
   return out.buffer;
 }
@@ -235,8 +267,10 @@ export async function resolveModelForAR(target: ARQRTarget, index: number): Prom
     return await mirrorFile(job);
   } catch (err) {
     console.warn('Model download failed:', source, err);
-    // Unknown size (older manifest): let the loader stream it as before
-    return job.size ? null : source;
+    // Unknown size (older manifest, file stored whole): let the loader try it directly as before.
+    // Otherwise report a load failure (not "missing": the file exists, the connection failed).
+    if (!job.size && !(err instanceof HttpError)) return source;
+    throw err instanceof Error ? err : new Error('failed');
   }
 }
 

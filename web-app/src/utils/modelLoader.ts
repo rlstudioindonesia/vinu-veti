@@ -17,6 +17,8 @@ function getLoader(): GLTFLoader {
   if (!sharedLoader) {
     const draco = new DRACOLoader();
     draco.setDecoderPath(new URL('./draco/', window.location.href).href);
+    // Default is 4 decoder threads: too many for budget phones, which also run the camera tracking
+    draco.setWorkerLimit(LOW_END ? 1 : 2);
     sharedLoader = new GLTFLoader();
     sharedLoader.setDRACOLoader(draco);
     // Big Meshopt models are decoded in background threads: the camera view keeps running smoothly
