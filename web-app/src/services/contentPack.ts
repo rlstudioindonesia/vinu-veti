@@ -10,7 +10,7 @@
  * The manifest is the index: every file is listed with its SHA-256 and size, so unchanged models are
  * never downloaded twice. The admin panel can also export the same layout as a ZIP.
  */
-import { unzipSync, zipSync, strToU8, strFromU8, Zippable } from 'fflate';
+import type { Zippable } from 'fflate';
 import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
 import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, resolveAudioSource, resolveModelSource, voiceOf } from './db';
 import { CHUNK_SIZE, partCount, REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
@@ -703,6 +703,8 @@ export async function buildManifest(
 
 /** Builds a ZIP content pack (manifest.json + models/ + audio/<id>_<lang>.*) from the given targets. */
 export async function exportContentPack(targets: ARQRTarget[]): Promise<Blob> {
+  // ZIP code is only needed in the admin tools: loaded here instead of with the app
+  const { strToU8, zipSync } = await import('fflate');
   const files: Zippable = {};
   const manifest = await buildManifest(
     targets,
@@ -720,6 +722,7 @@ export async function exportContentPack(targets: ARQRTarget[]): Promise<Blob> {
 
 /** Imports a ZIP content pack as locally editable stickers. Returns the number of stickers imported. */
 export async function importContentPack(file: Blob): Promise<number> {
+  const { strFromU8, unzipSync } = await import('fflate');
   const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
   const manifestKey = Object.keys(entries).find((k) => k === 'manifest.json' || k.endsWith('/manifest.json'));
   if (!manifestKey) throw new Error('manifest.json tidak ditemukan di dalam ZIP');
