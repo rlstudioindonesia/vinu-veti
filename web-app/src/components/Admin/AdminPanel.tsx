@@ -52,6 +52,8 @@ const VOICE_LABELS: Record<VoiceLang, { flag: string; label: string }> = {
 
 // Models bigger than this are compressed automatically on upload
 const COMPRESS_ABOVE = 5 * 1024 * 1024;
+// Models bigger than this (after compression) cannot be opened on many children's phones
+const TOO_HEAVY_MB = 40;
 
 const GLB_ACCEPT = '.glb,model/gltf-binary,application/octet-stream';
 
@@ -204,6 +206,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Big models are slow to download on kids' phones and fill up their storage
   const sizeWarning = (f: PendingFile) => {
     const mb = f.data.byteLength / 1048576;
+    // Measured: opening a 114 MB model takes ~900 MB of memory, the same scene compressed to 24 MB
+    // ~240 MB. Above TOO_HEAVY_MB many children's phones cannot open the model at all.
+    if (mb > TOO_HEAVY_MB) {
+      return (
+        `Model ${mb.toFixed(0)} MB terlalu berat: banyak HP anak tidak sanggup membukanya (tertahan "memuat" lalu gagal). ` +
+        'Unggah dari menu admin di browser laptop agar kompresi berhasil, atau kecilkan tekstur (maks. 2048 px) dan jumlah poligon di Blender.'
+      );
+    }
     return mb > 15
       ? `Model masih ${mb.toFixed(1)} MB setelah dikompres. Masih bisa dipublikasikan (dipecah otomatis), tapi unduhan untuk anak akan lama.`
       : null;
@@ -233,7 +243,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return f;
     } catch (err) {
       console.warn('Compression failed, keeping the original:', err);
-      showNotice('Model tidak bisa dikompres, file asli dipakai.');
+      // Usually the device ran out of memory: compressing a big model needs ~5x its size in memory
+      showNotice(
+        f.data.byteLength > TOO_HEAVY_MB * 1048576
+          ? 'Model tidak bisa dikompres di perangkat ini (memori kurang), file asli dipakai. Unggah dari browser laptop agar dikompres.'
+          : 'Model tidak bisa dikompres, file asli dipakai.'
+      );
       return f;
     } finally {
       setCompressing(null);
