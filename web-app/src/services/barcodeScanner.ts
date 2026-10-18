@@ -1,11 +1,4 @@
-import {
-  BarcodeFormat,
-  BinaryBitmap,
-  DecodeHintType,
-  HTMLCanvasElementLuminanceSource,
-  HybridBinarizer,
-  QRCodeReader,
-} from '@zxing/library';
+import type { ZxingQr } from './zxingQr';
 import { applyHomography, homography, Point2 } from '../utils/qrPose';
 import { cameraLight } from './cameraLight';
 
@@ -134,11 +127,9 @@ function qrCornersFromZxing(pts: Array<{ x: number; y: number; moduleSize: numbe
 
 export class BarcodeScannerService {
   private currentStream: MediaStream | null = null;
-  private zxingReader = new QRCodeReader();
-  private zxingHints = new Map<DecodeHintType, unknown>([
-    [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]],
-    [DecodeHintType.TRY_HARDER, true],
-  ]);
+  // ZXing's QR reader, loaded on demand (see zxingQr.ts)
+  private zxing: ((canvas: HTMLCanvasElement) => ZxingQr | null) | null = null;
+  private zxingLoading: Promise<void> | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private nativeDetector: NativeDetector | null | undefined = undefined;
   private lastRegion: { x: number; y: number; w: number; h: number; t: number } | null = null;
@@ -272,6 +263,19 @@ export class BarcodeScannerService {
     }
   }
 
+  /** Starts loading ZXing (once); frames are skipped by ZXing until it is ready. */
+  private loadZxing(): boolean {
+    if (this.zxing) return true;
+    this.zxingLoading ??= import('./zxingQr')
+      .then((m) => {
+        this.zxing = m.decodeQr;
+      })
+      .catch(() => {
+        this.zxingLoading = null; // retried on a later frame (e.g. chunk briefly unavailable)
+      });
+    return false;
+  }
+
   private async getNativeDetector(): Promise<NativeDetector | null> {
     if (this.nativeDetector !== undefined) return this.nativeDetector;
     this.nativeDetector = null;
@@ -286,6 +290,8 @@ export class BarcodeScannerService {
         this.nativeDetector = null;
       }
     }
+    // No built-in detector: ZXing reads every frame, start loading it now
+    if (!this.nativeDetector) this.loadZxing();
     return this.nativeDetector;
   }
 
@@ -340,6 +346,8 @@ export class BarcodeScannerService {
         this.nativeDetector = null;
       }
     }
+    const decode = this.loadZxing() ? this.zxing! : null;
+    if (!decode) return null;
 
     // 2. ZXing on a canvas copy of the frame. While tracking, only the area around the last known QR
     //    position is decoded: a much smaller image, so scans are faster and the model follows closely.
@@ -368,50 +376,42 @@ export class BarcodeScannerService {
     ctx.drawImage(videoElement, src.x, src.y, src.w, src.h, 0, 0, cW, cH);
     if (dark) enhanceContrast(ctx, cW, cH);
 
-    try {
-      const bitmap = new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas)));
-      const result = this.zxingReader.decode(bitmap, this.zxingHints);
-      const corners = qrCornersFromZxing(
-        result.getResultPoints().map((p) => ({
-          x: src.x + p.getX() / scale,
-          y: src.y + p.getY() / scale,
-          moduleSize: ((p as unknown as { getEstimatedModuleSize?: () => number }).getEstimatedModuleSize?.() ?? 0) / scale,
-        }))
-      );
-      if (!corners) return null;
-      const xs = corners.map((p) => p.x);
-      const ys = corners.map((p) => p.y);
-      const minX = Math.min(...xs);
-      const minY = Math.min(...ys);
-      const side = Math.max(Math.max(...xs) - minX, Math.max(...ys) - minY);
-
-      this.lastRegion = { x: minX, y: minY, w: side, h: side, t: capturedAt };
-      this.lastMethod = 'ZXing';
-      this.fullResNext = false;
-      return {
-        text: result.getText(),
-        timestamp: capturedAt,
-        anchor: {
-          x: minX,
-          y: minY,
-          width: side,
-          height: side,
-          videoWidth: vW,
-          videoHeight: vH,
-          cornerPoints: corners,
-          timestamp: capturedAt,
-          mediaTime,
-        },
-      };
-    } catch {
+    const result = decode(canvas);
+    if (!result) {
       if (!assisting) {
         this.lastRegion = null; // lost it: scan the whole frame next time
         this.fullResNext = !this.fullResNext && scale < 1;
       }
       return null; // No QR in this frame
-    } finally {
-      this.zxingReader.reset();
     }
+    const corners = qrCornersFromZxing(
+      result.points.map((p) => ({ x: src.x + p.x / scale, y: src.y + p.y / scale, moduleSize: p.moduleSize / scale }))
+    );
+    if (!corners) return null;
+    const xs = corners.map((p) => p.x);
+    const ys = corners.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const side = Math.max(Math.max(...xs) - minX, Math.max(...ys) - minY);
+
+    this.lastRegion = { x: minX, y: minY, w: side, h: side, t: capturedAt };
+    this.lastMethod = 'ZXing';
+    this.fullResNext = false;
+    return {
+      text: result.text,
+      timestamp: capturedAt,
+      anchor: {
+        x: minX,
+        y: minY,
+        width: side,
+        height: side,
+        videoWidth: vW,
+        videoHeight: vH,
+        cornerPoints: corners,
+        timestamp: capturedAt,
+        mediaTime,
+      },
+    };
   }
 }
 
