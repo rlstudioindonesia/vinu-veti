@@ -1,11 +1,4 @@
-/** Audio type from the first bytes (Safari only plays a blob when its type is right). */
-function sniffAudioType(b: Uint8Array): string {
-  const tag = String.fromCharCode(...b.slice(0, 4));
-  if (tag === 'RIFF') return 'audio/wav';
-  if (tag === 'OggS') return 'audio/ogg';
-  if (String.fromCharCode(...b.slice(4, 8)) === 'ftyp') return 'audio/mp4';
-  return 'audio/mpeg';
-}
+import { sniffAudioType } from '../utils/audioType';
 
 // Manual Audio Service for user-uploaded audio files (.mp3, .wav, .m4a)
 class SoundService {
@@ -81,7 +74,11 @@ class SoundService {
       if (typeof audioData === 'string') {
         src = audioData;
       } else if (audioData instanceof Blob) {
-        src = URL.createObjectURL(audioData);
+        // A blob without a type (stored by older versions) gets one, or Safari will not play it
+        const typed = audioData.type
+          ? audioData
+          : new Blob([audioData], { type: sniffAudioType(new Uint8Array(await audioData.slice(0, 12).arrayBuffer())) });
+        src = URL.createObjectURL(typed);
         this.currentAudioUrl = src;
       } else {
         const blob = new Blob([audioData], { type: sniffAudioType(new Uint8Array(audioData, 0, Math.min(12, audioData.byteLength))) });
