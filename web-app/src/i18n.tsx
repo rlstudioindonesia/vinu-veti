@@ -89,6 +89,9 @@ const STRINGS = {
   loadingModel: { id: 'Memuat objek 3D...', en: 'Loading 3D object...', tl: 'Nilo-load ang 3D na bagay...' },
   modelMissing: { id: 'Model 3D belum diunggah untuk stiker ini', en: 'No 3D model uploaded for this sticker yet', tl: 'Wala pang 3D model para sa sticker na ito' },
   modelFailed: { id: 'Model 3D gagal dimuat', en: 'The 3D model could not be loaded', tl: 'Hindi ma-load ang 3D model' },
+  tooDark: { id: 'Terlalu gelap? Nyalakan lampu', en: 'Too dark? Turn on the light', tl: 'Masyadong madilim? Buksan ang ilaw' },
+  torchOn: { id: 'Nyalakan lampu', en: 'Turn on light', tl: 'Buksan ang ilaw' },
+  torchOff: { id: 'Matikan lampu', en: 'Turn off light', tl: 'Patayin ang ilaw' },
   tapToChange: { id: 'Sentuh karakternya untuk ganti gerakan!', en: 'Touch the character to change its move!', tl: 'Pindutin ang karakter para magpalit ng galaw!' },
   // AR safety notice (shown every time the AR camera starts; Google Play Families policy)
   safetyTitle: { id: 'Sebelum Bermain AR', en: 'Before You Play AR', tl: 'Bago Maglaro ng AR' },

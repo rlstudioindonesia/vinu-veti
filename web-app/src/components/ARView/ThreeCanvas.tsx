@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
-import { getModelEntries, resolveModelSource } from '../../services/db';
+import { getModelEntries } from '../../services/db';
+import { resolveModelForAR } from '../../services/contentPack';
 import { loadGlbCached, normalizeModel } from '../../utils/modelLoader';
 import { qrTracker } from '../../services/qrTracker';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
@@ -33,6 +34,8 @@ interface Step {
 
 // Taps this close to the character (screen px) also count, so small fingers do not miss it
 const TAP_PADDING_PX = 36;
+// Finger travel (screen px) before a sideways swipe starts turning the character
+const TURN_START_PX = 24;
 // Little "jump" when the character is touched
 const BOUNCE_MS = 280;
 // Appear (springy pop) / disappear (shrink) animation durations
@@ -159,8 +162,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   // Touch interaction
   const yawRef = useRef<number>(0);
   const userScaleRef = useRef<number>(1);
-  const pointerRef = useRef<{ down: boolean; x: number; y: number; startX: number; startY: number }>({
-    down: false, x: 0, y: 0, startX: 0, startY: 0,
+  const pointerRef = useRef<{ down: boolean; x: number; y: number; startX: number; startY: number; turning: boolean }>({
+    down: false, x: 0, y: 0, startX: 0, startY: 0, turning: false,
   });
   const pinchRef = useRef<{ dist: number; base: number } | null>(null);
 
@@ -265,7 +268,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           const stab = stabilizerRef.current;
           const now = performance.now();
           gyro.poll();
-          stab.applyCameraRotation(gyro.take());
+          const turn = gyro.take();
+          stab.applyCameraRotation(turn);
+          gravity.applyCameraRotation(turn);
           // Measurement for this frame: the frame-by-frame tracker when it follows this sticker
           // (every camera frame, steady), otherwise a new decode result
           let reading: QRAnchor | null = null;
@@ -534,7 +539,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
           try {
             // Cached per file + version: scanning a page again shows its character instantly
             loaded = await loadGlbCached(`${entries[i].id}|${target.updatedAt ?? ''}|${entries[i].url ?? ''}`, () =>
-              resolveModelSource(target, i)
+              resolveModelForAR(target, i)
             );
           } catch (err) {
             if (i > 0 && err instanceof Error && err.message === 'missing') continue;
@@ -627,12 +632,21 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, qrAnchor, onMo
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    pointerRef.current = { down: true, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY };
+    pointerRef.current = { down: true, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, turning: false };
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const p = pointerRef.current;
     if (!p.down || pinchRef.current) return;
+    // Only a deliberate sideways swipe turns the character: a resting finger or a hand holding the
+    // phone at the screen edge must not make it rotate by itself
+    if (!p.turning) {
+      const dx = e.clientX - p.startX;
+      const dy = e.clientY - p.startY;
+      if (Math.abs(dx) < TURN_START_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      p.turning = true;
+      p.x = e.clientX;
+    }
     yawRef.current += (e.clientX - p.x) * 0.01;
     p.x = e.clientX;
     p.y = e.clientY;

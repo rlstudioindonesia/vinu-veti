@@ -205,25 +205,48 @@ export function clearModelCache() {
   modelCache.clear();
 }
 
+// Size box every character is fitted into, in units of its height: as tall as 1, and its footprint
+// (widest side seen from above) at most FOOTPRINT. Tall characters are sized by their height, long or
+// wide ones (a dragon, a bus, a lying cat) by their footprint, so none of them covers the whole page.
+const FOOTPRINT = 1.25;
+// An extra animation file whose own size differs from the main model by more than this factor was
+// exported in other units (cm instead of m…): it is fitted on its own instead of using the main scale.
+const UNIT_MISMATCH = 2.5;
+
+/** Bounding box of what is actually drawn: hidden helpers, lines and points are left out. */
+function visibleBox(model: THREE.Object3D): THREE.Box3 {
+  const box = new THREE.Box3();
+  const part = new THREE.Box3();
+  model.traverseVisible((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    part.makeEmpty().expandByObject(mesh);
+    if (!part.isEmpty()) box.union(part);
+  });
+  return box.isEmpty() ? new THREE.Box3().setFromObject(model) : box;
+}
+
 /**
- * Wraps a model in a pivot so that it is 1 unit tall, centred on X/Z and standing on y = 0.
- * Models exported from different tools then all appear at a predictable size on the QR sticker.
+ * Wraps a model in a pivot so that it fits a 1-unit-tall size box, centred on X/Z and standing on y = 0.
+ * Models exported from different tools (any units, any proportions) then all appear at a similar,
+ * book-friendly size on the QR sticker.
  *
  * Pass `fixedScale` (the scale returned for the main model) for the other animation files of the same
  * character, so the character keeps exactly the same size when switching animations.
  */
 export function normalizeModel(model: THREE.Object3D, fixedScale?: number): { pivot: THREE.Group; scale: number } {
   model.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(model);
+  const box = visibleBox(model);
   const pivot = new THREE.Group();
   pivot.add(model);
   if (box.isEmpty()) return { pivot, scale: fixedScale ?? 1 };
 
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
-  // Flat models (e.g. a card) are sized by their largest side instead of their height
-  const ref = size.y > Math.max(size.x, size.z) * 0.2 ? size.y : Math.max(size.x, size.y, size.z);
-  const s = fixedScale ?? (ref > 0 ? 1 / ref : 1);
+  const ref = Math.max(size.y, Math.max(size.x, size.z) / FOOTPRINT);
+  const own = ref > 0 ? 1 / ref : 1;
+  const sameUnits = fixedScale !== undefined && own / fixedScale < UNIT_MISMATCH && fixedScale / own < UNIT_MISMATCH;
+  const s = sameUnits ? fixedScale! : own;
   model.scale.multiplyScalar(s);
   model.position.set(-center.x * s, -box.min.y * s, -center.z * s);
   return { pivot, scale: s };

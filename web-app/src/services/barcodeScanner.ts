@@ -7,6 +7,7 @@ import {
   QRCodeReader,
 } from '@zxing/library';
 import { applyHomography, homography, Point2 } from '../utils/qrPose';
+import { cameraLight } from './cameraLight';
 
 export interface QRAnchor {
   x: number; // Video pixel X (top-left of QR bounding box)
@@ -42,6 +43,36 @@ type NativeDetectorCtor = {
 const SCAN_WIDTH = 960;
 // Max width of the cropped area around the QR while tracking
 const ROI_SCAN_WIDTH = 560;
+// Average brightness (0-255) below which the picture counts as dark: the torch button is offered and
+// frames are contrast-stretched before decoding
+const DARK_LEVEL = 70;
+const BRIGHTNESS_EVERY_MS = 400;
+
+/**
+ * Stretches the brightness range of a dark / low-contrast frame to the full 0-255 (ignoring the
+ * darkest and brightest 1 %), with a gamma lift for shadows: the QR's black and white modules
+ * become clearly separable again for the binarizer.
+ */
+function enhanceContrast(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < d.length; i += 16) hist[(d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8]++;
+  const total = d.length / 16;
+  let lo = 0;
+  let hi = 255;
+  for (let acc = 0; lo < 255 && (acc += hist[lo]) < total * 0.01; lo++);
+  for (let acc = 0; hi > 0 && (acc += hist[hi]) < total * 0.01; hi--);
+  if (hi - lo < 8) return;
+  const lut = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) lut[v] = 255 * Math.pow(Math.min(1, Math.max(0, (v - lo) / (hi - lo))), 0.7);
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = lut[d[i]];
+    d[i + 1] = lut[d[i + 1]];
+    d[i + 2] = lut[d[i + 2]];
+  }
+  ctx.putImageData(img, 0, 0);
+}
 
 /**
  * Camera + QR scanner.
@@ -112,6 +143,60 @@ export class BarcodeScannerService {
   private fullResNext = false;
   /** Which decoder found the last QR (shown in the diagnostics overlay). */
   public lastMethod: 'Android' | 'ZXing' | '' = '';
+  // Low light: measured on a tiny copy of the frame now and then
+  private probe: HTMLCanvasElement | null = null;
+  private brightnessAt = 0;
+  private nativeMisses = 0;
+  /** Average brightness of the camera picture (0-255). */
+  public brightness = 255;
+
+  constructor() {
+    cameraLight.setter = (on) => this.setTorch(on);
+  }
+
+  public get isDark(): boolean {
+    return this.brightness < DARK_LEVEL;
+  }
+
+  /** Turns the phone's flashlight on/off (only while the camera runs, where supported). */
+  public async setTorch(on: boolean): Promise<boolean> {
+    const track = this.currentStream?.getVideoTracks()[0];
+    if (!track || !cameraLight.torchSupported) return false;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: on } as MediaTrackConstraintSet] });
+      cameraLight.torchOn = on;
+    } catch {
+      cameraLight.torchOn = false;
+    }
+    cameraLight.notify();
+    return cameraLight.torchOn;
+  }
+
+  private measureBrightness(video: HTMLVideoElement) {
+    const now = Date.now();
+    if (now - this.brightnessAt < BRIGHTNESS_EVERY_MS) return;
+    this.brightnessAt = now;
+    if (!this.probe) {
+      this.probe = document.createElement('canvas');
+      this.probe.width = 32;
+      this.probe.height = 32;
+    }
+    const ctx = this.probe.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+    // Centre of the picture, where the child points the QR
+    const vW = video.videoWidth;
+    const vH = video.videoHeight;
+    const side = Math.min(vW, vH) * 0.6;
+    ctx.drawImage(video, (vW - side) / 2, (vH - side) / 2, side, side, 0, 0, 32, 32);
+    const d = ctx.getImageData(0, 0, 32, 32).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
+    this.brightness = sum / (d.length / 4);
+    if (cameraLight.dark !== this.isDark) {
+      cameraLight.dark = this.isDark;
+      cameraLight.notify();
+    }
+  }
 
   public async startCamera(videoElement: HTMLVideoElement): Promise<MediaStream> {
     this.stopCamera();
@@ -144,6 +229,25 @@ export class BarcodeScannerService {
     }
 
     this.currentStream = stream;
+    cameraLight.torchOn = false;
+    cameraLight.torchSupported = false;
+    const track = stream.getVideoTracks()[0];
+    try {
+      const caps = (track?.getCapabilities?.() ?? {}) as MediaTrackCapabilities & {
+        torch?: boolean;
+        focusMode?: string[];
+        exposureMode?: string[];
+      };
+      cameraLight.torchSupported = !!caps.torch;
+      // Keep focus and exposure adapting to the page (sharp, readable QR in dim rooms)
+      const advanced: Record<string, string>[] = [];
+      if (caps.focusMode?.includes('continuous')) advanced.push({ focusMode: 'continuous' });
+      if (caps.exposureMode?.includes('continuous')) advanced.push({ exposureMode: 'continuous' });
+      if (advanced.length > 0) await track.applyConstraints({ advanced: advanced as MediaTrackConstraintSet[] }).catch(() => undefined);
+    } catch {
+      // capabilities not available in this WebView
+    }
+    cameraLight.notify();
     videoElement.muted = true;
     videoElement.setAttribute('playsinline', 'true');
     videoElement.srcObject = stream;
@@ -156,6 +260,10 @@ export class BarcodeScannerService {
   }
 
   public stopCamera() {
+    cameraLight.torchOn = false;
+    cameraLight.torchSupported = false;
+    cameraLight.dark = false;
+    cameraLight.notify();
     if (this.currentStream) {
       this.currentStream.getTracks().forEach((track) => track.stop());
       this.currentStream = null;
@@ -192,6 +300,8 @@ export class BarcodeScannerService {
     if (!vW || !vH) return null;
     const capturedAt = Date.now(); // frame time, used to predict motion between scans
     const mediaTime = videoElement.currentTime;
+    this.measureBrightness(videoElement);
+    const dark = this.isDark;
 
     // 1. Native BarcodeDetector (fast, available in most Android WebViews)
     const detector = await this.getNativeDetector();
@@ -217,7 +327,10 @@ export class BarcodeScannerService {
             },
           };
         }
-        return null;
+        // In a dark room the native detector often sees nothing: every other miss, ZXing gets a
+        // contrast-enhanced copy of the frame below
+        this.nativeMisses++;
+        if (!dark || this.nativeMisses % 2 === 1) return null;
       } catch {
         // Detector failed on this device, permanently fall back to ZXing
         this.nativeDetector = null;
@@ -248,6 +361,7 @@ export class BarcodeScannerService {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return null;
     ctx.drawImage(videoElement, src.x, src.y, src.w, src.h, 0, 0, cW, cH);
+    if (dark) enhanceContrast(ctx, cW, cH);
 
     try {
       const bitmap = new BinaryBitmap(new HybridBinarizer(new HTMLCanvasElementLuminanceSource(canvas)));
@@ -268,6 +382,7 @@ export class BarcodeScannerService {
 
       this.lastRegion = { x: minX, y: minY, w: side, h: side, t: capturedAt };
       this.lastMethod = 'ZXing';
+      this.nativeMisses = 0;
       this.fullResNext = false;
       return {
         text: result.getText(),

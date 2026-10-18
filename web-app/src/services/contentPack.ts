@@ -13,7 +13,7 @@
 import { unzipSync, zipSync, strToU8, strFromU8, Zippable } from 'fflate';
 import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
 import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, resolveAudioSource, resolveModelSource, voiceOf } from './db';
-import { partCount, REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
+import { CHUNK_SIZE, partCount, REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
 
 export interface PackFile {
   file: string; // path relative to the manifest
@@ -83,25 +83,173 @@ export async function fetchManifest(base: string, timeoutMs: number): Promise<Co
   }
 }
 
-async function download(url: string, size?: number): Promise<ArrayBuffer> {
-  // Big files are stored online in parts (see CHUNK_SIZE); files inside the APK are always whole
-  const parts = url.startsWith(BUNDLED_BASE) ? 0 : partCount(size);
-  if (parts === 0) {
+// Big files are fetched as several byte ranges at the same time: on mobile networks one connection
+// rarely uses the full speed, and a dropped connection only repeats one small piece, not the file.
+const SEGMENT_SIZE = 4 * 1024 * 1024;
+const PARALLEL_SEGMENTS = 4;
+const SEGMENT_RETRIES = 3;
+
+async function fetchBytes(url: string, timeoutMs: number, range?: [number, number]): Promise<{ status: number; data: Uint8Array }> {
+  const ctrl = new AbortController();
+  const timer = window.setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      cache: 'no-store',
+      headers: range ? { Range: `bytes=${range[0]}-${range[1] - 1}` } : undefined,
+    });
+    if (!res.ok) throw new Error(`Download gagal (${res.status}): ${url}`);
+    return { status: res.status, data: new Uint8Array(await res.arrayBuffer()) };
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function withRetries<T>(job: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await job();
+    } catch (err) {
+      if (attempt >= SEGMENT_RETRIES) throw err;
+      await new Promise((r) => window.setTimeout(r, 800 * attempt));
+    }
+  }
+}
+
+/** Runs `jobs` with at most `limit` of them at the same time. */
+async function runLimited(jobs: Array<() => Promise<void>>, limit: number): Promise<void> {
+  let next = 0;
+  let failure: unknown = null;
+  const worker = async () => {
+    while (next < jobs.length && !failure) {
+      const job = jobs[next++];
+      try {
+        await job();
+      } catch (err) {
+        failure = err;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, jobs.length) }, worker));
+  if (failure) throw failure;
+}
+
+/** Downloads one stored file (`size` bytes known) into `out` at `offset`, in parallel byte ranges. */
+async function downloadInto(url: string, size: number, out: Uint8Array, offset: number): Promise<void> {
+  if (size <= SEGMENT_SIZE) {
+    const { data } = await withRetries(() => fetchBytes(url, 180000));
+    if (data.byteLength !== size) throw new Error(`Ukuran file tidak cocok: ${url}`);
+    out.set(data, offset);
+    return;
+  }
+  // First piece also tells whether the server supports ranges (206); otherwise it sent the whole file.
+  // An older WebView that refuses the Range header falls back to one plain download.
+  const first = await withRetries(() => fetchBytes(url, 180000, [0, SEGMENT_SIZE])).catch(() =>
+    withRetries(() => fetchBytes(url, 300000))
+  );
+  if (first.status !== 206) {
+    if (first.data.byteLength !== size) throw new Error(`Ukuran file tidak cocok: ${url}`);
+    out.set(first.data, offset);
+    return;
+  }
+  if (first.data.byteLength !== SEGMENT_SIZE) throw new Error(`Ukuran file tidak cocok: ${url}`);
+  out.set(first.data, offset);
+  const jobs: Array<() => Promise<void>> = [];
+  for (let start = SEGMENT_SIZE; start < size; start += SEGMENT_SIZE) {
+    const end = Math.min(size, start + SEGMENT_SIZE);
+    jobs.push(async () => {
+      const { status, data } = await withRetries(() => fetchBytes(url, 180000, [start, end]));
+      if (status !== 206 || data.byteLength !== end - start) throw new Error(`Ukuran file tidak cocok: ${url}`);
+      out.set(data, offset + start);
+    });
+  }
+  await runLimited(jobs, PARALLEL_SEGMENTS);
+}
+
+async function downloadNow(url: string, size?: number): Promise<ArrayBuffer> {
+  // Files inside the APK are always whole and local: read directly
+  if (url.startsWith(BUNDLED_BASE) || !size) {
     const res = await fetchWithTimeout(url, 180000);
     if (!res.ok) throw new Error(`Download gagal (${res.status}): ${url}`);
     return res.arrayBuffer();
   }
-  const out = new Uint8Array(size!);
-  let offset = 0;
-  for (let i = 0; i < parts; i++) {
-    const res = await fetchWithTimeout(`${url}.part${i}`, 300000);
-    if (!res.ok) throw new Error(`Download gagal (${res.status}): ${url}.part${i}`);
-    const chunk = new Uint8Array(await res.arrayBuffer());
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
+  // Big files are stored online in parts (see CHUNK_SIZE)
+  const out = new Uint8Array(size);
+  const parts = partCount(size);
+  if (parts === 0) {
+    await downloadInto(url, size, out, 0);
+  } else {
+    for (let i = 0; i < parts; i++) {
+      const start = i * CHUNK_SIZE;
+      await downloadInto(`${url}.part${i}`, Math.min(CHUNK_SIZE, size - start), out, start);
+    }
   }
-  if (offset !== size) throw new Error(`Ukuran file tidak cocok: ${url}`);
   return out.buffer;
+}
+
+// One download per file at a time: the AR view (sticker scanned before its file was mirrored) and the
+// background sync share it instead of fetching the same file twice
+const inFlight = new Map<string, Promise<ArrayBuffer>>();
+
+async function download(url: string, size?: number): Promise<ArrayBuffer> {
+  let job = inFlight.get(url);
+  if (!job) {
+    job = downloadNow(url, size).finally(() => inFlight.delete(url));
+    inFlight.set(url, job);
+  }
+  return job;
+}
+
+/** Downloads a mirror job, checks it against the published SHA-256 and stores it on the phone. */
+async function mirrorFile(job: MirrorJob): Promise<ArrayBuffer> {
+  const data = await download(job.url, job.size);
+  // Integrity check: the bytes (joined from parts for big files) must match the published index
+  const sha = await sha256Hex(data);
+  if (job.sha && sha !== job.sha) throw new Error(`File rusak saat diunduh (SHA tidak cocok): ${job.url}`);
+  if (job.kind === 'model') await ARDatabase.saveAssetBlob(job.id, data, job.name, sha);
+  else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha, job.lang);
+  return data;
+}
+
+/**
+ * Model source for the AR view. A sticker scanned before its online file was mirrored is downloaded
+ * once (fast, in parallel pieces), saved on the phone right away and shown from memory: the next scan
+ * (also offline) loads it from local storage.
+ */
+export async function resolveModelForAR(target: ARQRTarget, index: number): Promise<Blob | ArrayBuffer | string | null> {
+  const source = await resolveModelSource(target, index);
+  if (typeof source !== 'string' || source.startsWith(BUNDLED_BASE) || !/^https?:/i.test(source)) return source;
+  const entry = getModelEntries(target)[index];
+  if (!entry || entry.url !== source || !REMOTE_CONTENT_BASE || !source.startsWith(REMOTE_CONTENT_BASE)) return source;
+  const asset = index > 0 ? target.assets?.[index - 1] : undefined;
+  const job: MirrorJob = {
+    key: entry.id,
+    id: entry.id,
+    kind: 'model',
+    url: source,
+    sha: index > 0 ? asset?.sha : target.customGlbSha,
+    size: index > 0 ? asset?.size : target.customGlbSize,
+    name: (index > 0 ? asset?.fileName : target.customGlbFileName) || `${entry.id}.glb`,
+  };
+  try {
+    return await mirrorFile(job);
+  } catch (err) {
+    console.warn('Model download failed:', source, err);
+    // Unknown size (older manifest): let the loader stream it as before
+    return job.size ? null : source;
+  }
+}
+
+/** Asks the browser not to clear the downloaded content when the phone runs low on space. */
+let persistAsked = false;
+function askPersistentStorage() {
+  if (persistAsked) return;
+  persistAsked = true;
+  try {
+    navigator.storage?.persist?.().catch(() => undefined);
+  } catch {
+    // not supported
+  }
 }
 
 function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
@@ -115,7 +263,17 @@ function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
     autoPlayAudio: p.autoPlayAudio ?? true,
     customGlbFileName: p.modelName,
     customGlbUrl: p.model ? new URL(p.model, base).href : undefined,
-    assets: (p.assets || []).map((a) => ({ id: a.id, name: a.name, fileName: a.name, url: new URL(a.file, base).href, scale: a.scale })),
+    customGlbSha: p.modelSha,
+    customGlbSize: p.modelSize,
+    assets: (p.assets || []).map((a) => ({
+      id: a.id,
+      name: a.name,
+      fileName: a.name,
+      url: new URL(a.file, base).href,
+      scale: a.scale,
+      sha: a.sha,
+      size: a.size,
+    })),
     voices: Object.fromEntries(
       Object.entries(packVoices(p)).map(([lang, f]) => [lang, { name: f!.name || 'audio', url: new URL(f!.file, base).href }])
     ) as Partial<Record<VoiceLang, VoiceFile>>,
@@ -176,6 +334,7 @@ export async function syncContentPack(
   onMetadataChanged?: () => void,
   onProgress?: (p: SyncProgress) => void
 ): Promise<SyncResult> {
+  askPersistentStorage();
   const [bundled, remote] = await Promise.all([
     fetchManifest(BUNDLED_BASE, 5000),
     REMOTE_CONTENT_BASE && navigator.onLine !== false ? fetchManifest(REMOTE_CONTENT_BASE, 10000) : Promise.resolve(null),
@@ -272,27 +431,29 @@ export async function syncContentPack(
 
   if (changed) onMetadataChanged?.();
 
-  // Mirror changed files one by one (keeps memory low on cheap phones)
+  // Mirror changed files, two at a time (each one in parallel pieces; memory stays low on cheap
+  // phones). Small files first, so most stickers work offline as early as possible.
   let allOk = true;
   let downloaded = 0;
   let failed = 0;
   if (queue.length > 0) onProgress?.({ done: 0, total: queue.length });
-  for (const job of queue) {
-    try {
-      const data = await download(job.url, job.size);
-      // Integrity check: the bytes (joined from parts for big files) must match the published index
-      const sha = await sha256Hex(data);
-      if (job.sha && sha !== job.sha) throw new Error(`File rusak saat diunduh (SHA tidak cocok): ${job.url}`);
-      if (job.kind === 'model') await ARDatabase.saveAssetBlob(job.id, data, job.name, sha);
-      else await ARDatabase.saveAudioBlob(job.id, data, job.name, sha, job.lang);
-      downloaded++;
-    } catch (err) {
-      console.warn('Mirror skipped, retried next time:', job.url, err);
-      allOk = false;
-      failed++;
-    }
-    onProgress?.({ done: downloaded + failed, total: queue.length });
-  }
+  queue.sort((a, b) => (a.size ?? Infinity) - (b.size ?? Infinity));
+  await runLimited(
+    queue.map((job) => async () => {
+      try {
+        // Already stored meanwhile (scanned in the AR view while this sync ran)
+        const sha = await storedSha(job);
+        if (!(sha && job.sha && sha === job.sha)) await mirrorFile(job);
+        downloaded++;
+      } catch (err) {
+        console.warn('Mirror skipped, retried next time:', job.url, err);
+        allOk = false;
+        failed++;
+      }
+      onProgress?.({ done: downloaded + failed, total: queue.length });
+    }),
+    2
+  );
 
   if (allOk) {
     try {

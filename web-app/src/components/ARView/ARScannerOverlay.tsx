@@ -1,6 +1,7 @@
 import React from 'react';
 import { ARQRTarget } from '../../types/arBook';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Flashlight, FlashlightOff } from 'lucide-react';
+import { cameraLight } from '../../services/cameraLight';
 import { useI18n } from '../../i18n';
 
 interface ARScannerOverlayProps {
@@ -13,6 +14,10 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
   onBackToHome,
 }) => {
   const { t } = useI18n();
+  // Torch (flashlight) button: shown when the phone has one; highlighted when the picture is dark
+  const [, refresh] = React.useReducer((x: number) => x + 1, 0);
+  React.useEffect(() => cameraLight.subscribe(refresh), []);
+  const { torchSupported, torchOn, dark } = cameraLight;
   // 5 quick taps on the sticker name toggle the tracking diagnostics (for support)
   const tapsRef = React.useRef<number[]>([]);
   const handleChipTap = () => {
@@ -65,8 +70,27 @@ export const ARScannerOverlay: React.FC<ARScannerOverlayProps> = ({
         </div>
       )}
 
-      {/* Empty bottom spacer */}
-      <div className="h-6 pointer-events-none" />
+      {/* Bottom: torch button (with a hint when it is too dark to read the QR) */}
+      <div className="h-14 flex items-end justify-end gap-2 pb-2">
+        {torchSupported && dark && !torchOn && (
+          <p className="text-[11px] font-semibold text-amber-200 bg-black/60 px-2.5 py-1 rounded-full mb-2.5">{t('tooDark')}</p>
+        )}
+        {torchSupported && (
+          <button
+            onClick={() => cameraLight.setTorch(!torchOn)}
+            className={`pointer-events-auto p-3 rounded-full backdrop-blur-md border transition-all active:scale-90 ${
+              torchOn
+                ? 'bg-amber-400 text-black border-amber-200'
+                : dark
+                  ? 'bg-amber-500/80 text-white border-amber-200 animate-pulse'
+                  : 'bg-black/50 text-white/80 border-white/10'
+            }`}
+            title={t(torchOn ? 'torchOff' : 'torchOn')}
+          >
+            {torchOn ? <FlashlightOff className="w-5 h-5" /> : <Flashlight className="w-5 h-5" />}
+          </button>
+        )}
+      </div>
     </div>
   );
 };
