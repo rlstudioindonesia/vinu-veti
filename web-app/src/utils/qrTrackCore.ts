@@ -200,11 +200,14 @@ export class TrackCore {
       this.w = w;
       this.h = h;
     }
-    const pyr = buildPyramid(gray, this.w, this.h, LEVELS);
+    // The image pyramid is only needed to follow a QR or to place a new decode. While the child is still
+    // looking for a sticker, frames are only kept (gray) in case a decode refers to them later: that
+    // saves ~90 % of the work per frame (the pyramid of an old frame is built when it is needed).
+    const pyr = this.H || this.pendingSeed ? buildPyramid(gray, this.w, this.h, LEVELS) : null;
     const frame: Frame = { t: now, mediaTime, gray, H: null };
 
     // 1. Follow the QR from the previous frame
-    if (this.H && this.prevPyr) {
+    if (this.H && this.prevPyr && pyr) {
       // Guesses for where each point is now, tried in order until one tracks:
       // 1. the phone's rotation (gyroscope) applied to the points, 2. constant velocity, 3. no motion
       const n = GX.length;
@@ -249,7 +252,7 @@ export class TrackCore {
 
     // 2. Apply a decode: start tracking, switch QR, or correct drift
     const seed = this.pendingSeed;
-    if (seed) {
+    if (seed && pyr) {
       this.pendingSeed = null;
       const seedH = homography(UNIT, seed.corners);
       // The decoded frame is usually a few frames old: find exactly that frame (same video time)
