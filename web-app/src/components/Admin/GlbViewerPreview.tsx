@@ -17,6 +17,9 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const animIdRef = useRef<number | null>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
+  // Size and height change with the sliders: applied every frame, without loading the model again
+  const placementRef = useRef({ scale: target.modelScale || 1, elevation: target.elevationOffset || 0 });
+  placementRef.current = { scale: target.modelScale || 1, elevation: target.elevationOffset || 0 };
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -83,9 +86,6 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
         }
 
         modelGroup = normalizeModel(res.scene).pivot;
-        const s = 1.4 * (target.modelScale || 1.0);
-        modelGroup.scale.setScalar(s);
-        modelGroup.position.y = -0.7 + (target.elevationOffset || 0);
         scene.add(modelGroup);
       } catch (e) {
         console.warn('Preview load error:', e);
@@ -102,6 +102,8 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
       }
       if (modelGroup) {
         modelGroup.rotation.y += 0.01;
+        modelGroup.scale.setScalar(1.4 * placementRef.current.scale);
+        modelGroup.position.y = -0.7 + placementRef.current.elevation;
       }
       renderer.render(scene, camera);
     };
@@ -111,12 +113,25 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
       isCancelled = true;
       if (animIdRef.current) cancelAnimationFrame(animIdRef.current);
       if (mixerRef.current) mixerRef.current.stopAllAction();
+      mixerRef.current = null;
+      // Free the model's GPU memory and the WebGL context itself (browsers allow only a few at once)
+      modelGroup?.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        mesh.geometry?.dispose();
+        const mats = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+        for (const m of mats) {
+          for (const v of Object.values(m)) if (v instanceof THREE.Texture) v.dispose();
+          m.dispose();
+        }
+      });
       renderer.dispose();
+      renderer.forceContextLoss();
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [target.id, target.customGlbUrl, target.modelScale, target.elevationOffset, customBlobData]);
+    // Only a different model file needs a new preview (not the size / height sliders)
+  }, [target.id, target.customGlbUrl, customBlobData]);
 
   return (
     <div className="relative w-full h-44 rounded-xl overflow-hidden bg-slate-950/80 border border-slate-800 flex items-center justify-center">
