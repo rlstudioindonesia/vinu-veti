@@ -76,6 +76,11 @@ class QrTracker {
   private handle = 0;
   private running = false;
   private stamps: number[] = [];
+  // Frames go to the worker as ImageBitmaps: the worker reads the pixels, so the main thread (which
+  // draws the 3D picture) never waits for a GPU read-back. null = not tried yet, false = unsupported
+  private bitmaps: boolean | null = null;
+  /** Main-thread time spent grabbing one frame (ms, averaged; diagnostics). */
+  grabMs = 0;
 
   start(video: HTMLVideoElement) {
     this.stop();
@@ -170,8 +175,32 @@ class QrTracker {
     }
     // One frame at a time: when the phone is busy, frames are skipped instead of piling up
     if (!v || this.pending.size > 0 || v.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !v.videoWidth) return;
+    const t0 = performance.now();
     const w = TRACK_W;
     const h = Math.round((v.videoHeight / v.videoWidth) * TRACK_W);
+    if (this.worker && this.bitmaps !== false && typeof createImageBitmap === 'function' && typeof OffscreenCanvas !== 'undefined') {
+      this.scale = w / v.videoWidth;
+      const prior = this.gyroPrior(captureTime, w, h, v.videoWidth, v.videoHeight);
+      this.lastCapture = captureTime;
+      const id = this.nextId++;
+      const now = Date.now();
+      this.pending.set(id, { captureTime, grabbed: performance.now(), now, scale: this.scale, videoWidth: v.videoWidth, videoHeight: v.videoHeight });
+      // The frame is taken from the video right now; scaling happens off the main thread
+      createImageBitmap(v, { resizeWidth: w, resizeHeight: h })
+        .then((bitmap) => {
+          if (!this.worker || !this.pending.has(id)) {
+            bitmap.close();
+            return;
+          }
+          this.worker.postMessage({ type: 'bitmap', id, bitmap, w, h, now, mediaTime, prior }, [bitmap]);
+        })
+        .catch(() => {
+          this.bitmaps = false;
+          this.pending.delete(id);
+        });
+      this.grabMs = this.grabMs * 0.9 + (performance.now() - t0) * 0.1;
+      return;
+    }
     if (w !== this.w || h !== this.h || !this.ctx) {
       this.canvas = document.createElement('canvas');
       this.canvas.width = w;
@@ -191,6 +220,7 @@ class QrTracker {
     this.pending.set(id, { captureTime, grabbed: performance.now(), now, scale: this.scale, videoWidth: v.videoWidth, videoHeight: v.videoHeight });
     if (this.worker) {
       this.worker.postMessage({ type: 'frame', id, rgba: rgba.buffer, w, h, now, mediaTime, prior }, [rgba.buffer]);
+      this.grabMs = this.grabMs * 0.9 + (performance.now() - t0) * 0.1;
     } else if (this.local) {
       const t0 = performance.now();
       const gray = new Uint8Array(w * h);
@@ -219,9 +249,14 @@ class QrTracker {
     return [e[0], e[3], e[6], e[1], e[4], e[7], e[2], e[5], e[8]].map((x) => x / e[8]);
   }
 
-  private onResult(m: { id: number; H: number[] | null; text: string; ms: number }) {
+  private onResult(m: { id: number; H: number[] | null; text: string; ms: number; noBitmap?: boolean }) {
     const p = this.pending.get(m.id);
     this.pending.delete(m.id);
+    if (m.noBitmap) {
+      this.bitmaps = false; // this worker cannot draw bitmaps: copy frames on the main thread again
+      return;
+    }
+    if (this.bitmaps === null && p) this.bitmaps = true;
     if (!p || !this.running) return;
     this.ok = !!m.H;
     if (m.H) {

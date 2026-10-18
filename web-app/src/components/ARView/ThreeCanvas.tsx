@@ -82,6 +82,13 @@ const MAX_PIXEL_RATIO = Math.min(window.devicePixelRatio || 1, LOW_END ? 1.5 : 2
 const MIN_PIXEL_RATIO = Math.min(MAX_PIXEL_RATIO, LOW_END ? 0.75 : 1);
 const SLOW_FRAME_S = 1 / 40;
 const FAST_FRAME_S = 1 / 55;
+// The picture is drawn once per camera frame (phone cameras give ~30 fps; the screen refreshes at 60
+// or more): the character changes in step with the video, and the GPU does half the work (less heat
+// and battery during long reading sessions). While the phone turns faster than this per screen
+// refresh (radians, ~14°/s) every refresh is drawn, so the gyroscope keeps the model glued on.
+const FAST_TURN_RAD = 0.004;
+// No camera frame for this long (ms): draw every refresh as before
+const CAMERA_FRAME_STALE_MS = 150;
 
 // Model height in QR-sticker widths when modelScale = 1
 const BASE_MODEL_HEIGHT = 2.0;
@@ -179,6 +186,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
   const statsRef = useRef<{ reads: number[]; latency: number }>({ reads: [], latency: 0 });
   const [debugText, setDebugText] = useState<string | null>(null);
   const gyroRef = useRef<GyroTracker | null>(null);
+  // Pictures drawn per second (diagnostics: follows the camera frame rate)
+  const drawFpsRef = useRef(0);
 
   // Touch interaction
   const yawRef = useRef<number>(0);
@@ -256,12 +265,18 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
     let frameAvg = 1 / 60;
     let frameCheck = 0;
     let fastFor = 0;
+    // Animation time not drawn yet (refreshes skipped between camera frames), and drawing statistics
+    let mixerTime = 0;
+    let outgoingTime = 0;
+    let lastCameraFrame = -1;
+    const draws: number[] = [];
     const animate = () => {
       frameId = requestAnimationFrame(animate);
       const rawDelta = clock.getDelta();
       const delta = Math.min(rawDelta, 0.05);
       const active = variantsRef.current[activeVariantRef.current];
-      if (modelRef.current?.visible) active?.mixer?.update(delta);
+      if (modelRef.current?.visible) mixerTime += delta;
+      let turnAngle = 0;
 
       const model = modelRef.current;
       const anchor = anchorRef.current;
@@ -293,6 +308,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           const now = performance.now();
           gyro.poll();
           const turn = gyro.take();
+          if (turn) turnAngle = 2 * Math.acos(Math.min(1, Math.abs(turn.w)));
           stab.applyCameraRotation(turn);
           gravity.applyCameraRotation(turn);
           // Measurement for this frame: the frame-by-frame tracker when it follows this sticker
@@ -380,7 +396,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
         const p0 = _v1.setFromMatrixPosition(model.matrix).project(camera);
         at = [((p0.x + 1) / 2) * (container.clientWidth || window.innerWidth), ((1 - p0.y) / 2) * (container.clientHeight || window.innerHeight)];
       }
-      (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length, at, rq, dist: stabilizerRef.current.distance(), track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
+      (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length, at, rq, dist: stabilizerRef.current.distance(), draw: drawFpsRef.current, track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
 
       // Character of the previous QR shrinking away while the new one appears
       const now2 = performance.now();
@@ -392,7 +408,6 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           disposeObject(o.group);
           return false;
         }
-        o.mixer?.update(delta);
         const sc = 1 - smoothstep(k);
         o.group.matrix.copy(o.base).multiply(_m2.makeScale(sc, sc, sc));
         return true;
@@ -423,10 +438,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
         });
       }
 
+      if (outgoingRef.current.length > 0) outgoingTime += delta;
       const needsDraw = !!model?.visible || outgoingRef.current.length > 0;
       if (!needsDraw && !drewLastFrame) return;
-      drewLastFrame = needsDraw;
-
+      // Screen refresh pace, measured on every refresh (also the skipped ones: a slow GPU shows up as a
+      // late refresh right after a drawn picture)
       if (model?.visible && rawDelta < 0.25) {
         frameAvg = frameAvg * 0.9 + rawDelta * 0.1;
         frameCheck += rawDelta;
@@ -443,8 +459,22 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           }
         }
       }
+      // Between camera frames there is nothing new to show (unless the phone turns fast)
+      const cam = barcodeScanner.cameraFrame;
+      const followCamera = cam.supported && performance.now() - cam.at < CAMERA_FRAME_STALE_MS;
+      if (needsDraw && followCamera && cam.seq === lastCameraFrame && turnAngle < FAST_TURN_RAD) return;
+      lastCameraFrame = cam.seq;
+      drewLastFrame = needsDraw;
 
+      if (model?.visible) active?.mixer?.update(Math.min(mixerTime, 0.1));
+      mixerTime = 0;
+      outgoingRef.current.forEach((o) => o.mixer?.update(Math.min(outgoingTime, 0.1)));
+      outgoingTime = 0;
       renderer.render(scene, camera);
+      const drawnAt = performance.now();
+      draws.push(drawnAt);
+      while (draws.length > 0 && drawnAt - draws[0] > 1000) draws.shift();
+      drawFpsRef.current = draws.length;
     };
     animate();
 
@@ -702,8 +732,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
         st.reads = st.reads.filter((t) => now - t < 1000);
         setDebugText(
           `Pembaca QR: ${barcodeScanner.lastMethod || '-'} · ${st.reads.length} baca/dtk · telat ${Math.round(st.latency)} ms\n` +
-            `Pelacak optik: ${qrTracker.isTracking() ? `aktif ✓ ${qrTracker.fps} fps · ${qrTracker.ms.toFixed(0)} ms (${qrTracker.mode}${qrTracker.rotationSince ? ' + gyro' : ''})` : 'menunggu QR'}\n` +
-            `Sensor gerak: ${gyroRef.current?.status() ?? '-'}`
+            `Pelacak optik: ${qrTracker.isTracking() ? `aktif ✓ ${qrTracker.fps} fps · ${qrTracker.ms.toFixed(0)} ms (${qrTracker.mode}${qrTracker.rotationSince ? ' + gyro' : ''}, ambil frame ${qrTracker.grabMs.toFixed(1)} ms)` : 'menunggu QR'}\n` +
+            `Sensor gerak: ${gyroRef.current?.status() ?? '-'} · gambar ${drawFpsRef.current} fps (kamera ${barcodeScanner.cameraFrame.supported ? 'diikuti' : 'tidak terbaca'})`
         );
       }, 250);
     };

@@ -1,4 +1,5 @@
 import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
+import { sniffAudioType } from '../utils/audioType';
 
 const DB_NAME = 'ar_qr_stickers_v1';
 const DB_VERSION = 1;
@@ -134,11 +135,23 @@ function txDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
+/**
+ * Files are stored as Blobs: the browser keeps them as files on disk and reads the bytes only when
+ * they are used, so looking up a stored 12 MB model does not copy all of it into memory. (Files
+ * stored by older versions as ArrayBuffers are still read as they are.)
+ */
+function asBlob(data: FileData, type: 'glb' | 'audio'): Blob {
+  if (data instanceof Blob && data.type) return data;
+  if (type === 'glb') return new Blob([data], { type: 'model/gltf-binary' });
+  return data instanceof Blob ? data : new Blob([data], { type: sniffAudioType(new Uint8Array(data, 0, Math.min(12, data.byteLength))) });
+}
+
 async function putAsset(key: string, data: FileData, name: string, type: 'glb' | 'audio', sha?: string) {
+  const blob = asBlob(data, type);
   const db = await getDB();
   const tx = db.transaction([STORE_ASSETS], 'readwrite');
   const store = tx.objectStore(STORE_ASSETS);
-  store.put({ id: key, data, name, type, sha, createdAt: Date.now() });
+  store.put({ id: key, data: blob, name, type, sha, createdAt: Date.now() });
   if (sha) store.put({ id: shaKey(key), sha });
   else store.delete(shaKey(key));
   await txDone(tx);

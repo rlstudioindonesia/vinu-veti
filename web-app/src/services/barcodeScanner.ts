@@ -142,6 +142,27 @@ export class BarcodeScannerService {
   private darkAssistAt = 0;
   /** Average brightness of the camera picture (0-255). */
   public brightness = 255;
+  // Camera frames shown on screen (requestVideoFrameCallback): the AR view draws once per frame
+  private frameSeq = 0;
+  private frameAt = 0;
+  private framesSupported = false;
+
+  /** Latest camera frame: a counter, when it was shown, and whether frames can be followed at all. */
+  public get cameraFrame(): { seq: number; at: number; supported: boolean } {
+    return { seq: this.frameSeq, at: this.frameAt, supported: this.framesSupported };
+  }
+
+  private followFrames(video: HTMLVideoElement, stream: MediaStream) {
+    const v = video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
+    if (!v.requestVideoFrameCallback) return;
+    this.framesSupported = true;
+    const tick = () => {
+      this.frameSeq++;
+      this.frameAt = performance.now();
+      if (this.currentStream === stream) v.requestVideoFrameCallback!(tick);
+    };
+    v.requestVideoFrameCallback(tick);
+  }
 
   constructor() {
     cameraLight.setter = (on) => this.setTorch(on);
@@ -249,6 +270,7 @@ export class BarcodeScannerService {
     } catch (e) {
       console.warn('Video play deferred:', e);
     }
+    this.followFrames(videoElement, stream);
     return stream;
   }
 
