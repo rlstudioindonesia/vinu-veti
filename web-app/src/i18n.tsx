@@ -87,7 +87,12 @@ const STRINGS = {
   },
   tryAgain: { id: 'Coba Lagi', en: 'Try Again', tl: 'Subukan Muli' },
   loadingModel: { id: 'Memuat objek 3D...', en: 'Loading 3D object...', tl: 'Nilo-load ang 3D na bagay...' },
-  modelMissing: { id: 'Model 3D belum diunggah untuk stiker ini', en: 'No 3D model uploaded for this sticker yet', tl: 'Wala pang 3D model para sa sticker na ito' },
+  // Also shown for QR slots printed in advance whose model is not uploaded yet
+  modelMissing: {
+    id: 'Objek 3D untuk stiker ini segera hadir',
+    en: 'The 3D object for this sticker is coming soon',
+    tl: 'Malapit nang dumating ang 3D na bagay para sa sticker na ito',
+  },
   openingModel: { id: 'Membuka objek 3D...', en: 'Opening 3D object...', tl: 'Binubuksan ang 3D na bagay...' },
   preparingModel: { id: 'Menyiapkan tampilan 3D...', en: 'Preparing the 3D view...', tl: 'Inihahanda ang 3D na tanawin...' },
   modelTooHeavy: {
