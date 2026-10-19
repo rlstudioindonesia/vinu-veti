@@ -8,7 +8,7 @@
  * `manifest.json` (the index) is uploaded last, so phones never see a half-published state.
  */
 import { ARQRTarget } from '../types/arBook';
-import { buildManifest, fetchManifest } from './contentPack';
+import { buildManifest, fetchManifest, forgetPublishedDeletions } from './contentPack';
 import { CHUNK_SIZE, partCount, REMOTE_CONTENT_BASE, SUPABASE_ANON_KEY, SUPABASE_BUCKET, SUPABASE_URL } from './cloudConfig';
 
 interface Session {
@@ -19,6 +19,21 @@ interface Session {
 }
 
 const SESSION_KEY = 'vv_supabase_session';
+// When this device last published (epoch ms): stickers changed after it are not on other devices yet
+const PUBLISHED_AT_KEY = 'vv_last_publish_at';
+
+export function lastPublishedAt(): number {
+  try {
+    return Number(localStorage.getItem(PUBLISHED_AT_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Created or changed on this device after its last publish: other devices do not have it yet. */
+export function isUnpublished(t: ARQRTarget, publishedAt = lastPublishedAt()): boolean {
+  return t.source === 'local' && t.updatedAt > publishedAt;
+}
 
 function loadSession(): Session | null {
   try {
@@ -156,6 +171,8 @@ export async function publishToCloud(
   onProgress?: (p: PublishProgress) => void
 ): Promise<PublishProgress> {
   await accessToken(); // fail early when not logged in
+  // Changes saved while publishing runs are not in this upload: they stay marked as unpublished
+  const publishStartedAt = Date.now();
   const previous = await fetchManifest(REMOTE_CONTENT_BASE, 10000);
   const known = new Set<string>();
   previous?.targets.forEach((t) => {
@@ -194,6 +211,12 @@ export async function publishToCloud(
   );
 
   await upload('manifest.json', JSON.stringify(manifest), 'application/json', 'no-cache');
+  try {
+    localStorage.setItem(PUBLISHED_AT_KEY, String(publishStartedAt));
+  } catch {
+    // ignore
+  }
+  forgetPublishedDeletions(new Set(manifest.targets.map((t) => t.id)));
   try {
     await removeUnused(referenced);
   } catch {

@@ -37,6 +37,8 @@ const SYNC_RETRY_MS = 2 * 60 * 1000;
 // scanned, and on a timer
 const SCAN_UPDATE_CHECK_MS = 10 * 1000;
 const PERIODIC_UPDATE_CHECK_MS = 2 * 60 * 1000;
+// Opening the developer menu is deliberate: check (almost) every time
+const ADMIN_UPDATE_CHECK_MS = 2000;
 
 // Admin tools are in every build. In the Play Store build the entry is hidden (tap the "VINU & VETI"
 // badge 7 times) and protected by the Supabase admin account. `npm run dev` and `npm run build:admin`
@@ -70,7 +72,7 @@ export default function App() {
   activeTargetRef.current = activeTarget;
   const qrLossTimerRef = useRef<number | null>(null);
   // Set by the content sync below: checks the online list for updates (throttled)
-  const checkUpdatesRef = useRef<(() => void) | null>(null);
+  const checkUpdatesRef = useRef<((minGapMs?: number) => void) | null>(null);
 
   // Stickers to prepare while one is shown: the next two in book order and the previous one
   // (children turn pages forward, sometimes back)
@@ -93,6 +95,11 @@ export default function App() {
       window.removeEventListener('vv-app-pause', onPause);
     };
   }, []);
+
+  // Opening the developer menu: fetch what other devices published meanwhile right away
+  useEffect(() => {
+    if (currentView === 'admin') checkUpdatesRef.current?.(ADMIN_UPDATE_CHECK_MS);
+  }, [currentView]);
 
   // Content updated while a sticker is shown (sync finished): switch to its new version, so the
   // updated model is loaded; a sticker that was unpublished is closed
@@ -176,7 +183,7 @@ export default function App() {
     loadTargetsFromDB().then(() => sync(true));
     // A model replaced and published while this app stays open must show up too: check when a sticker
     // is scanned (see handleQRDetected) and every few minutes (the online list is a small file)
-    checkUpdatesRef.current = () => sync(false, SCAN_UPDATE_CHECK_MS);
+    checkUpdatesRef.current = (minGapMs = SCAN_UPDATE_CHECK_MS) => sync(false, minGapMs);
     const periodic = window.setInterval(() => {
       if (document.visibilityState === 'visible') sync(false, PERIODIC_UPDATE_CHECK_MS - 5000);
     }, PERIODIC_UPDATE_CHECK_MS);

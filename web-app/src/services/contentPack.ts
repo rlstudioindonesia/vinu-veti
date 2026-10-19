@@ -85,6 +85,18 @@ function saveDeletedPackIds(ids: Set<string>) {
   }
 }
 
+/** After a publish: deletions no longer in the online list need no remembering. */
+export function forgetPublishedDeletions(publishedIds: Set<string>) {
+  const ids = deletedPackIds();
+  ids.forEach((id) => !publishedIds.has(id) && ids.delete(id));
+  saveDeletedPackIds(ids);
+}
+
+/** Published stickers deleted on this device whose deletion is not published yet. */
+export function pendingDeletionCount(): number {
+  return deletedPackIds().size;
+}
+
 /** Remember that a published sticker was deleted here, so the next sync does not bring it back. */
 export function markPackStickerDeleted(id: string) {
   const ids = deletedPackIds();

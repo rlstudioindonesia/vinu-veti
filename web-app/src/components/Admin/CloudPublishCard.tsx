@@ -6,11 +6,13 @@ import { cloudLogin, cloudLogout, getCloudUser, publishToCloud, PublishProgress 
 
 interface CloudPublishCardProps {
   targets: ARQRTarget[];
+  /** Called after a successful publish (the "not published yet" marks are cleared). */
+  onPublished?: () => void;
 }
 
 const LAST_PUBLISH_KEY = 'vv_last_publish';
 
-export const CloudPublishCard: React.FC<CloudPublishCardProps> = ({ targets }) => {
+export const CloudPublishCard: React.FC<CloudPublishCardProps> = ({ targets, onPublished }) => {
   const [user, setUser] = useState<string | null>(getCloudUser());
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -63,6 +65,7 @@ export const CloudPublishCard: React.FC<CloudPublishCardProps> = ({ targets }) =
         // ignore
       }
       setLastPublish(when);
+      onPublished?.();
       setMessage({
         ok: true,
         text: `Terpublikasi! ${result.uploaded} file diunggah, ${result.skipped} file tidak berubah (dilewati). HP pengguna akan mengunduh perubahan saat online.`,

@@ -2,7 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { ARQRTarget, ARQRTargetAsset } from '../../types/arBook';
 import { ARDatabase, audioKey, resolveAudioSource, voiceOf } from '../../services/db';
 import { VOICE_LANGS, VoiceLang } from '../../types/arBook';
-import { exportContentPack, importContentPack, markPackStickerDeleted, saveFileToDevice } from '../../services/contentPack';
+import { exportContentPack, importContentPack, markPackStickerDeleted, pendingDeletionCount, saveFileToDevice } from '../../services/contentPack';
+import { isUnpublished, lastPublishedAt } from '../../services/cloudPublish';
+import { CLOUD_PUBLISH_ENABLED } from '../../services/cloudConfig';
 import { soundService } from '../../services/soundService';
 import { GlbViewerPreview } from './GlbViewerPreview';
 import { CloudPublishCard } from './CloudPublishCard';
@@ -108,6 +110,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [editingTarget, setEditingTarget] = useState<ARQRTarget | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
+  // Changes saved here but not published: other devices (and the children's phones) do not see them
+  const [publishedAt, setPublishedAt] = useState<number>(lastPublishedAt);
+  const [pendingDeletions, setPendingDeletions] = useState<number>(pendingDeletionCount);
+  const unpublishedCount = CLOUD_PUBLISH_ENABLED ? targets.filter((t) => isUnpublished(t, publishedAt)).length + pendingDeletions : 0;
   // "QR slots": empty stickers made in advance so their QR codes can be printed in the book before
   // the 3D models exist; a model uploaded later keeps the same QR code
   const [slotDialog, setSlotDialog] = useState<boolean>(false);
@@ -505,7 +511,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       showNotice(
         emptySlot
           ? 'Slot QR tersimpan tanpa model. QR-nya sudah bisa dicetak; unggah model kapan saja, kodenya tetap sama.'
-          : `Stiker QR tersimpan & siap dipakai offline.${mirrorWarning}`
+          : `Stiker QR tersimpan di perangkat ini.${mirrorWarning}` +
+              (CLOUD_PUBLISH_ENABLED ? ' Tekan Publikasikan agar tampil di perangkat lain & HP anak.' : '')
       );
       closeForm();
     } catch (err) {
@@ -526,7 +533,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setDeletePwError(null);
     // A published sticker is also in the online list: without this, the next sync installs it again
     const published = deleteTarget.source === 'pack';
-    if (published) markPackStickerDeleted(deleteTarget.id);
+    if (published) {
+      markPackStickerDeleted(deleteTarget.id);
+      setPendingDeletions(pendingDeletionCount());
+    }
     await ARDatabase.deleteTarget(deleteTarget);
     await onRefreshTargets();
     setDeleteTarget(null);
@@ -634,6 +644,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       )}
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 max-w-4xl mx-auto w-full">
+        {unpublishedCount > 0 && (
+          <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-xs text-amber-200 leading-relaxed">
+            <strong>{unpublishedCount} perubahan belum dipublikasikan.</strong> Perangkat lain dan HP anak belum melihatnya.
+            Tekan <strong>Publikasikan</strong> (di bawah daftar) setelah selesai mengubah.
+          </div>
+        )}
         <input
           type="text"
           placeholder="Cari nama stiker atau kode QR..."
@@ -666,6 +682,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
                       {t.bookPage ? `Hal. ${t.bookPage}` : 'Stiker QR'}
                       {t.source === 'pack' ? ' · Paket' : ''}
+                      {CLOUD_PUBLISH_ENABLED && isUnpublished(t, publishedAt) && (
+                        <span className="ml-1 text-amber-300">· Belum dipublikasikan</span>
+                      )}
                     </span>
                     <span className="font-mono text-xs font-bold text-emerald-300 bg-black/40 px-2 py-0.5 rounded-md border border-white/10">
                       {t.qrCode}
@@ -716,7 +735,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
         )}
 
-        <CloudPublishCard targets={targets} />
+        <CloudPublishCard
+          targets={targets}
+          onPublished={() => {
+            setPublishedAt(lastPublishedAt());
+            setPendingDeletions(pendingDeletionCount());
+          }}
+        />
 
         {/* Offline content pack: backup / content bundled inside the APK */}
         <div className="mt-4 p-4 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
