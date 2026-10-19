@@ -12,7 +12,7 @@
  */
 import type { Zippable } from 'fflate';
 import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
-import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, resolveAudioSource, resolveModelSource, voiceOf } from './db';
+import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, pictureKey, resolveAudioSource, resolveModelSource, resolvePictureSource, voiceOf } from './db';
 import { CHUNK_SIZE, partCount, REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
 
 export interface PackFile {
@@ -37,6 +37,8 @@ export interface PackTarget {
   assets?: Array<{ id: string; name: string; scale?: number } & PackFile>;
   // Narration voice per language
   voices?: Partial<Record<VoiceLang, PackFile & { name?: string }>>;
+  // Picture that shows the model too (picture tracking)
+  picture?: PackFile & { name?: string };
   // Legacy single voice (= Indonesian), still written for older app versions
   audio?: string;
   audioSha?: string;
@@ -308,6 +310,7 @@ function sameFiles(a: ARQRTarget, b: ARQRTarget): boolean {
       t.customGlbSize,
       (t.assets || []).map((x) => [x.id, x.url, x.sha, x.size]),
       VOICE_LANGS.map((l) => [t.voices?.[l]?.url, t.voices?.[l]?.sha, t.voices?.[l]?.size]),
+      [t.picture?.url, t.picture?.sha, t.picture?.size],
     ]);
   return files(a) === files(b);
 }
@@ -406,6 +409,24 @@ function audioJob(target: ARQRTarget, lang: VoiceLang): MirrorJob | null {
   return { key: audioKey(target.id, lang), id: target.id, kind: 'audio', lang, url: voice.url, sha: voice.sha, size: voice.size, name: voice.name || 'audio' };
 }
 
+function pictureJob(target: ARQRTarget): MirrorJob | null {
+  const pic = target.picture;
+  if (!pic || !isOnlineUrl(pic.url)) return null;
+  const key = pictureKey(target.id);
+  return { key, id: key, kind: 'model', url: pic.url, sha: pic.sha, size: pic.size, name: pic.name || 'picture.jpg' };
+}
+
+/** Picture source for picture tracking (see resolveForAR): a picture seen once also works offline. */
+export async function resolvePictureForAR(target: ARQRTarget): Promise<Blob | ArrayBuffer | string | null> {
+  const job = pictureJob(target);
+  if (!job) return resolvePictureSource(target);
+  return resolveForAR(
+    job,
+    () => ARDatabase.getAssetBlob(job.id),
+    () => ARDatabase.nativeModelUrl(job.id)
+  );
+}
+
 /** Model source for the AR view (see resolveForAR). */
 export async function resolveModelForAR(target: ARQRTarget, index: number): Promise<Blob | ArrayBuffer | string | null> {
   const job = modelJob(target, index);
@@ -482,6 +503,9 @@ function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
     voices: Object.fromEntries(
       Object.entries(packVoices(p)).map(([lang, f]) => [lang, { name: f!.name || 'audio', url: new URL(f!.file, base).href, sha: f!.sha, size: f!.size }])
     ) as Partial<Record<VoiceLang, VoiceFile>>,
+    picture: p.picture?.file
+      ? { name: p.picture.name || 'picture.jpg', url: new URL(p.picture.file, base).href, sha: p.picture.sha, size: p.picture.size }
+      : undefined,
     source: 'pack',
     createdAt,
     updatedAt: p.updatedAt,
@@ -510,6 +534,10 @@ function mirrorJobs(p: PackTarget, t: ARQRTarget): MirrorJob[] {
     const url = t.voices?.[lang]?.url;
     if (url) jobs.push({ key: audioKey(t.id, lang), id: t.id, kind: 'audio', lang, url, sha: voices[lang]?.sha, size: voices[lang]?.size, name: voices[lang]?.name || 'audio' });
   });
+  if (t.picture?.url) {
+    const key = pictureKey(t.id);
+    jobs.push({ key, id: key, kind: 'model', url: t.picture.url, sha: p.picture?.sha, size: p.picture?.size, name: p.picture?.name || 'picture.jpg' });
+  }
   return jobs;
 }
 
@@ -587,6 +615,7 @@ export async function syncContentPack(
     add(bt.model, bt.modelSha);
     (bt.assets || []).forEach((a) => add(a.file, a.sha));
     Object.values(packVoices(bt)).forEach((v) => add(v?.file, v?.sha));
+    add(bt.picture?.file, bt.picture?.sha);
   }
   let changed = false;
   const queue: MirrorJob[] = [];
@@ -613,6 +642,7 @@ export async function syncContentPack(
           const v = target.voices?.[lang];
           if (v) v.url = fromApk(v.url, pv[lang]?.sha);
         }
+        if (target.picture) target.picture.url = fromApk(target.picture.url, p.picture?.sha);
       }
       const stale: MirrorJob[] = [];
       for (const job of mirrorJobs(p, target)) {
@@ -632,7 +662,7 @@ export async function syncContentPack(
     } else {
       if (local && local.updatedAt === p.updatedAt) continue;
       // Bundled files live in the APK; drop mirrored copies so the bundled ones are used
-      await ARDatabase.deleteStoredFiles(getModelEntries(target).map((e) => e.id));
+      await ARDatabase.deleteStoredFiles([...getModelEntries(target).map((e) => e.id), pictureKey(target.id)]);
     }
     await ARDatabase.saveTarget(target, true);
     changed = true;
@@ -710,7 +740,7 @@ async function toBytes(src: Blob | ArrayBuffer | string | null): Promise<Uint8Ar
 }
 
 export interface CollectedFile {
-  role: 'model' | 'asset' | 'audio';
+  role: 'model' | 'asset' | 'audio' | 'picture';
   assetIndex?: number;
   lang?: VoiceLang;
   bytes: Uint8Array;
@@ -797,6 +827,13 @@ export async function buildManifest(
         p.audioName = voice.name;
       }
     }
+    if (t.picture) {
+      const ref = online(t, t.picture.url, t.picture.sha, t.picture.size);
+      const r = ref
+        ? { path: ref.file, f: { sha: ref.sha, bytes: { byteLength: ref.size } } }
+        : await take(await resolvePictureSource(t), 'picture', extOf(t.picture.name, 'jpg'));
+      if (r) p.picture = { file: r.path, sha: r.f.sha, size: r.f.bytes.byteLength, name: t.picture.name };
+    }
     packTargets.push(p);
   }
   return { app: 'vinu-veti', version: 1, updatedAt: Date.now(), targets: packTargets };
@@ -812,7 +849,9 @@ export async function exportContentPack(targets: ARQRTarget[]): Promise<Blob> {
     (t, f) =>
       f.role === 'audio'
         ? `audio/${t.id}_${f.lang ?? 'id'}.${f.ext}`
-        : `models/${f.role === 'asset' ? t.assets![f.assetIndex!].id : t.id}.glb`,
+        : f.role === 'picture'
+          ? `pictures/${t.id}.${f.ext}`
+          : `models/${f.role === 'asset' ? t.assets![f.assetIndex!].id : t.id}.glb`,
     async (_t, f, path) => {
       files[path] = [f.bytes, { level: 0 }];
     }
@@ -839,6 +878,7 @@ export async function importContentPack(file: Blob): Promise<number> {
       customGlbUrl: undefined,
       voices: {},
       assets: [],
+      picture: undefined,
       source: 'local',
     };
     const main = p.model && entries[prefix + p.model];
@@ -854,6 +894,11 @@ export async function importContentPack(file: Blob): Promise<number> {
       if (!data) continue;
       await ARDatabase.saveAudioBlob(p.id, copy(data), f.name || 'audio', undefined, lang);
       target.voices![lang] = { name: f.name || 'audio' };
+    }
+    const pic = p.picture?.file && entries[prefix + p.picture.file];
+    if (pic) {
+      await ARDatabase.saveAssetBlob(pictureKey(p.id), copy(pic), p.picture!.name || 'picture.jpg');
+      target.picture = { name: p.picture!.name || 'picture.jpg' };
     }
     await ARDatabase.saveTarget(target);
     count++;
