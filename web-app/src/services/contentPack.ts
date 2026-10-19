@@ -63,6 +63,34 @@ const APPLIED_KEY = 'vv_content_pack_applied';
 // Version (updatedAt) of the online sticker list installed on this phone, set as soon as the list is
 // installed, even when some files are still missing
 const REMOTE_LIST_KEY = 'vv_content_remote_list';
+// Published stickers deleted in the admin panel of this device: not installed again by the sync
+// (they are still in the online list until the next "Publish", which drops them for every phone)
+const DELETED_KEY = 'vv_deleted_pack_stickers';
+
+function deletedPackIds(): Set<string> {
+  try {
+    const ids = JSON.parse(localStorage.getItem(DELETED_KEY) || '[]');
+    return new Set(Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDeletedPackIds(ids: Set<string>) {
+  try {
+    if (ids.size > 0) localStorage.setItem(DELETED_KEY, JSON.stringify([...ids]));
+    else localStorage.removeItem(DELETED_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** Remember that a published sticker was deleted here, so the next sync does not bring it back. */
+export function markPackStickerDeleted(id: string) {
+  const ids = deletedPackIds();
+  ids.add(id);
+  saveDeletedPackIds(ids);
+}
 
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
   const ctrl = new AbortController();
@@ -525,7 +553,10 @@ export async function syncContentPack(
   let changed = false;
   const queue: MirrorJob[] = [];
 
+  const deleted = deletedPackIds();
   for (const p of manifest.targets) {
+    // Deleted in the admin panel here and not published yet: keep it deleted
+    if (deleted.has(p.id)) continue;
     const local = byId.get(p.id);
     // Content made on this device in the admin panel always wins over the pack
     if (local && local.source !== 'pack') continue;
@@ -569,6 +600,12 @@ export async function syncContentPack(
 
   // Remove pack stickers that are no longer published
   const published = new Set(manifest.targets.map((t) => t.id));
+  // A deletion that has been published (no longer in the list) needs no remembering any more
+  let forgotten = false;
+  deleted.forEach((id) => {
+    if (!published.has(id)) forgotten = deleted.delete(id) || forgotten;
+  });
+  if (forgotten) saveDeletedPackIds(deleted);
   for (const t of existing) {
     if (t.source === 'pack' && !published.has(t.id)) {
       await ARDatabase.deleteTarget(t);

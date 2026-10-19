@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ARQRTarget, ARQRTargetAsset } from '../../types/arBook';
 import { ARDatabase, audioKey, resolveAudioSource, voiceOf } from '../../services/db';
 import { VOICE_LANGS, VoiceLang } from '../../types/arBook';
-import { exportContentPack, importContentPack, saveFileToDevice } from '../../services/contentPack';
+import { exportContentPack, importContentPack, markPackStickerDeleted, saveFileToDevice } from '../../services/contentPack';
 import { soundService } from '../../services/soundService';
 import { GlbViewerPreview } from './GlbViewerPreview';
 import { CloudPublishCard } from './CloudPublishCard';
@@ -524,10 +524,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
     setDeletePw('');
     setDeletePwError(null);
+    // A published sticker is also in the online list: without this, the next sync installs it again
+    const published = deleteTarget.source === 'pack';
+    if (published) markPackStickerDeleted(deleteTarget.id);
     await ARDatabase.deleteTarget(deleteTarget);
     await onRefreshTargets();
     setDeleteTarget(null);
-    showNotice('Stiker QR berhasil dihapus');
+    showNotice(
+      published
+        ? 'Stiker dihapus dari perangkat ini. Tekan Publikasikan agar juga terhapus dari HP anak.'
+        : 'Stiker QR berhasil dihapus'
+    );
   };
 
   const handleExport = async () => {
