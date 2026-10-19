@@ -34,6 +34,9 @@ export interface ARQRTarget {
   // Narration voice per language (.mp3, .wav, .m4a), played when the character appears in AR
   voices?: Partial<Record<VoiceLang, VoiceFile>>;
   autoPlayAudio?: boolean;
+  // Picture (e.g. the book page) that shows the model too, next to the QR sticker (.jpg/.png).
+  // The file itself is stored locally under pictureKey(id).
+  picture?: VoiceFile;
   // Legacy single voice (from before languages): treated as the Indonesian voice
   hasCustomAudio?: boolean;
   customAudioName?: string;

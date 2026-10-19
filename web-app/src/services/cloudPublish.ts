@@ -150,6 +150,9 @@ const MIME: Record<string, string> = {
   m4a: 'audio/mp4',
   wav: 'audio/wav',
   ogg: 'audio/ogg',
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
 };
 
 /** Uploads changed files + a new manifest. Returns how many files were uploaded / skipped. */

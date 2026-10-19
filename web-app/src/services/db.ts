@@ -198,6 +198,11 @@ export function audioKey(id: string, lang: VoiceLang = 'id'): string {
   return lang === 'id' ? `${id}_audio` : `${id}_audio_${lang}`;
 }
 
+/** Storage key of a sticker's picture (picture tracking). Stored like a model file. */
+export function pictureKey(id: string): string {
+  return `${id}_picture`;
+}
+
 /** File id used for the native (app-private) copy of a voice. */
 function nativeAudioId(id: string, lang: VoiceLang): string {
   return lang === 'id' ? id : `${id}_${lang}`;
@@ -243,7 +248,7 @@ export const ARDatabase = {
   },
 
   async deleteTarget(target: ARQRTarget): Promise<void> {
-    const ids = [target.id, ...(target.assets || []).map((a) => a.id)];
+    const ids = [target.id, pictureKey(target.id), ...(target.assets || []).map((a) => a.id)];
     await nativeQueue;
     try {
       [...ids, ...VOICE_LANGS.map((l) => nativeAudioId(target.id, l))].forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
@@ -356,6 +361,17 @@ export async function resolveModelSource(
   const nativeUrl = getAndroidBridge()?.getModelUrl?.(entry.id);
   if (nativeUrl) return nativeUrl;
   return entry.url || null;
+}
+
+/** Best available source of the sticker's picture (picture tracking), null when it has none. */
+export async function resolvePictureSource(target: ARQRTarget): Promise<FileData | string | null> {
+  if (!target.picture) return null;
+  const key = pictureKey(target.id);
+  const stored = await ARDatabase.getAssetBlob(key);
+  if (stored) return stored;
+  const nativeUrl = getAndroidBridge()?.getModelUrl?.(key);
+  if (nativeUrl) return nativeUrl;
+  return target.picture.url || null;
 }
 
 /** Best available source of the sticker's voice in a language (null when there is none). */

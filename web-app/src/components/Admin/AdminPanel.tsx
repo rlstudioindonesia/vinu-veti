@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ARQRTarget, ARQRTargetAsset } from '../../types/arBook';
-import { ARDatabase, audioKey, resolveAudioSource, voiceOf } from '../../services/db';
+import { ARDatabase, audioKey, pictureKey, resolveAudioSource, resolvePictureSource, voiceOf } from '../../services/db';
 import { VOICE_LANGS, VoiceLang } from '../../types/arBook';
 import { exportContentPack, importContentPack, markPackStickerDeleted, pendingDeletionCount, saveFileToDevice } from '../../services/contentPack';
 import { isUnpublished, lastPublishedAt } from '../../services/cloudPublish';
@@ -32,6 +32,7 @@ import {
   PackagePlus,
   ChevronUp,
   ChevronDown,
+  Image as ImageIcon,
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -101,6 +102,41 @@ async function checkDeletePassword(pw: string): Promise<boolean> {
   return (await sha256Hex(new TextEncoder().encode(pw.trim()))) === DELETE_PASSWORD_SHA256;
 }
 
+/** Stores a picked picture at most 1024 px (long side) as JPEG: plenty for recognition, small to publish. */
+async function shrinkPicture(file: Blob): Promise<ArrayBuffer> {
+  const bitmap = await createImageBitmap(file);
+  const s = Math.min(1, 1024 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * s));
+  canvas.height = Math.max(1, Math.round(bitmap.height * s));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('no canvas');
+  ctx.fillStyle = '#fff'; // transparent PNG areas print as white paper
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+  if (!blob) throw new Error('encode failed');
+  return blob.arrayBuffer();
+}
+
+/** How well a picture can be recognised by the camera: by the number of distinct corner features. */
+async function pictureQualityOf(blob: Blob): Promise<'good' | 'fair' | 'poor'> {
+  const { buildReference, toGray, REF_SIZE } = await import('../../utils/imageFeatures');
+  const bitmap = await createImageBitmap(blob);
+  const s = REF_SIZE / Math.max(bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * s));
+  canvas.height = Math.max(1, Math.round(bitmap.height * s));
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return 'fair';
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  const ref = buildReference(toGray(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height));
+  const n = ref.features.n;
+  return n >= 900 ? 'good' : n >= 400 ? 'fair' : 'poor';
+}
+
 export const AdminPanel: React.FC<AdminPanelProps> = ({
   targets,
   onRefreshTargets,
@@ -161,6 +197,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [pendingVoices, setPendingVoices] = useState<Partial<Record<VoiceLang, PendingFile>>>({});
   const [removedVoices, setRemovedVoices] = useState<VoiceLang[]>([]);
   const [playingVoice, setPlayingVoice] = useState<VoiceLang | null>(null);
+  // Picture tracking: picture picked in the form (saved with the sticker), removal, preview and how
+  // well it can be recognised
+  const [pendingPicture, setPendingPicture] = useState<PendingFile | null>(null);
+  const [pictureRemoved, setPictureRemoved] = useState(false);
+  const [picturePreview, setPicturePreview] = useState<string | null>(null);
+  const [pictureQuality, setPictureQuality] = useState<'good' | 'fair' | 'poor' | null>(null);
 
   const filteredTargets = targets.filter(
     (t) =>
@@ -179,6 +221,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setRemovedExtraIds([]);
     setPendingVoices({});
     setRemovedVoices([]);
+    setPendingPicture(null);
+    setPictureRemoved(false);
     setFormError(null);
     soundService.stopAudio();
     setPlayingVoice(null);
@@ -507,6 +551,53 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  // Preview + recognition quality of the form's picture (picked now, or stored with the sticker)
+  const editingId = editingTarget?.id;
+  const hasPicture = !!editingTarget?.picture;
+  useEffect(() => {
+    setPicturePreview(null);
+    setPictureQuality(null);
+    if (!editingId || !hasPicture || !editingTarget) return;
+    let cancelled = false;
+    let url: string | null = null;
+    (async () => {
+      const src = pendingPicture?.data ?? (await resolvePictureSource(editingTarget));
+      if (!src || cancelled) return;
+      const blob = typeof src === 'string' ? await (await fetch(src)).blob() : src instanceof Blob ? src : new Blob([src]);
+      if (cancelled) return;
+      url = URL.createObjectURL(blob);
+      setPicturePreview(url);
+      setPictureQuality(await pictureQualityOf(blob));
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingId, hasPicture, pendingPicture]);
+
+  const handlePictureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !editingTarget) return;
+    try {
+      const data = await shrinkPicture(file);
+      const name = `${file.name.replace(/\.[^/.]+$/, '') || 'gambar'}.jpg`;
+      setPendingPicture({ data, name });
+      setPictureRemoved(false);
+      setEditingTarget({ ...editingTarget, picture: { name } });
+    } catch {
+      setFormError('Gambar tidak bisa dibaca. Gunakan file JPG atau PNG.');
+    }
+  };
+
+  const handlePictureRemove = () => {
+    if (!editingTarget) return;
+    setPendingPicture(null);
+    setPictureRemoved(true);
+    setEditingTarget({ ...editingTarget, picture: undefined });
+  };
+
   const handleSave = async () => {
     if (!editingTarget) return;
     const code = (editingTarget.qrCode || '').trim();
@@ -548,6 +639,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         await ARDatabase.saveAudioBlob(editingTarget.id, f.data, f.name, undefined, lang);
       }
       if (removedVoices.length > 0) await ARDatabase.deleteAssetKeys(removedVoices.map((l) => audioKey(editingTarget.id, l)));
+      if (pendingPicture) await ARDatabase.saveAssetBlob(pictureKey(editingTarget.id), pendingPicture.data, pendingPicture.name);
+      else if (pictureRemoved) await ARDatabase.deleteAssetKeys([pictureKey(editingTarget.id)]);
 
       await ARDatabase.saveTarget({
         ...editingTarget,
@@ -750,6 +843,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <span className="flex items-center gap-1 text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-md border border-sky-500/20">
                         <Music className="w-3 h-3" />
                         Suara: {VOICE_LANGS.filter((l) => voiceOf(t, l)).map((l) => VOICE_LABELS[l].flag).join(' ')}
+                      </span>
+                    )}
+                    {t.picture && (
+                      <span className="flex items-center gap-1 text-fuchsia-300 bg-fuchsia-500/10 px-2 py-0.5 rounded-md border border-fuchsia-500/20">
+                        <ImageIcon className="w-3 h-3" />
+                        QR + Gambar
                       </span>
                     )}
                   </div>
@@ -1123,6 +1222,62 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </div>
                   );
                 })}
+              </div>
+
+              <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2">
+                <span className="text-xs font-bold text-fuchsia-300 flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  Gambar Pemicu (opsional)
+                </span>
+                <p className="text-[10px] text-slate-400 leading-relaxed">
+                  Selain QR <b className="text-slate-200">{editingTarget.qrCode || '-'}</b>, model juga muncul saat kamera diarahkan
+                  ke gambar ini (misalnya halaman buku atau ilustrasinya). QR tetap berfungsi. Unggah gambar persis seperti yang
+                  dicetak; gambar yang ramai detail &amp; kontras paling mudah dikenali.
+                </p>
+                <div className="flex items-center gap-3">
+                  {picturePreview ? (
+                    <img src={picturePreview} alt="Gambar pemicu" className="w-20 h-20 object-contain rounded-xl bg-black/40 border border-white/10 shrink-0" />
+                  ) : (
+                    <div className="w-20 h-20 rounded-xl bg-black/40 border border-dashed border-white/15 flex items-center justify-center text-slate-600 shrink-0">
+                      <ImageIcon className="w-6 h-6" />
+                    </div>
+                  )}
+                  <div className="min-w-0 space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <label className="cursor-pointer px-2.5 py-1 bg-fuchsia-600 hover:bg-fuchsia-500 text-white rounded-lg text-[11px] font-semibold">
+                        {editingTarget.picture ? 'Ganti Gambar' : 'Pilih Gambar'}
+                        <input type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" onChange={handlePictureUpload} className="hidden" />
+                      </label>
+                      {editingTarget.picture && (
+                        <button
+                          type="button"
+                          onClick={() => askDeletePassword('Hapus gambar pemicu?', handlePictureRemove)}
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400"
+                          title="Hapus gambar"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-300 truncate">
+                      {editingTarget.picture ? editingTarget.picture.name : 'Belum ada gambar (hanya QR)'}
+                      {pendingPicture ? ' (belum disimpan)' : ''}
+                    </p>
+                    {pictureQuality && (
+                      <p
+                        className={`text-[10px] font-semibold ${
+                          pictureQuality === 'good' ? 'text-emerald-400' : pictureQuality === 'fair' ? 'text-amber-300' : 'text-rose-400'
+                        }`}
+                      >
+                        {pictureQuality === 'good'
+                          ? 'Mudah dikenali kamera ✓'
+                          : pictureQuality === 'fair'
+                            ? 'Cukup dikenali. Gambar dengan lebih banyak detail lebih cepat terdeteksi.'
+                            : 'Sulit dikenali: gambar terlalu polos. Pakai gambar dengan lebih banyak detail/kontras.'}
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 

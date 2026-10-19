@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { ARQRTarget } from './types/arBook';
 import { ARDatabase } from './services/db';
-import { resolveAudioForAR, syncContentPack } from './services/contentPack';
+import { resolveAudioForAR, resolvePictureForAR, syncContentPack } from './services/contentPack';
+import { imageDetector } from './services/imageDetector';
 import { getCloudUser } from './services/cloudPublish';
 import { QRAnchor } from './services/barcodeScanner';
 import { soundService } from './services/soundService';
@@ -223,6 +224,29 @@ export default function App() {
     }, 300);
     return () => window.clearTimeout(id);
   }, [isLoadingApp]);
+
+  // Picture tracking: the stickers' pictures are prepared once the camera view was opened (not at
+  // start-up: it takes a moment of CPU per picture), and again whenever a picture changes
+  const picturesStartedRef = useRef(false);
+  useEffect(() => {
+    if (currentView === 'ar') picturesStartedRef.current = true;
+    if (!picturesStartedRef.current) return;
+    imageDetector.setPictures(
+      targets
+        .filter((t) => t.picture)
+        .map((t) => ({
+          code: t.qrCode,
+          key: `${t.id}|${t.picture!.sha ?? ''}|${t.updatedAt}`,
+          load: async () => {
+            const src = await resolvePictureForAR(t);
+            if (!src) return null;
+            if (src instanceof Blob) return src;
+            if (typeof src === 'string') return (await fetch(src)).blob();
+            return new Blob([src]);
+          },
+        }))
+    );
+  }, [targets, currentView]);
 
   const resetAR = useCallback(() => {
     if (qrLossTimerRef.current) window.clearTimeout(qrLossTimerRef.current);

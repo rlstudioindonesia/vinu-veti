@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { barcodeScanner, QRAnchor } from '../../services/barcodeScanner';
 import { qrTracker } from '../../services/qrTracker';
+import { imageDetector, PICTURE_UNIT } from '../../services/imageDetector';
 import { RefreshCw, VideoOff } from 'lucide-react';
 import { useI18n } from '../../i18n';
 
@@ -14,6 +15,14 @@ const SCAN_INTERVAL = 30;
 // While the tracker follows the QR every frame, decoding is only needed now and then (to confirm
 // the QR and correct drift); fewer decodes leave the phone's CPU free for smooth tracking.
 const SCAN_INTERVAL_TRACKING = 250;
+// Sticker pictures: looked for this often (ms between searches) while nothing is tracked, and while
+// a picture is tracked only now and then, to confirm it and correct drift
+const PICTURE_INTERVAL = 120;
+const PICTURE_INTERVAL_TRACKING = 900;
+
+function sameCode(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, videoRef }) => {
   const { t } = useI18n();
@@ -92,6 +101,9 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
 
     const video = videoRef.current;
     if (video) qrTracker.start(video);
+    // Code of the sticker whose picture (not its QR) the tracker follows. The QR and the picture of
+    // the same sticker do not take turns: they give different squares, the model would jump.
+    let pictureCode: string | null = null;
 
     const loop = async () => {
       if (stopped) return;
@@ -101,7 +113,12 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
           const tracked = qrTracker.isTracking() ? qrTracker.latest : null;
           if (tracked) barcodeScanner.hintRegion(tracked.anchor);
           const result = await barcodeScanner.scanOnce(video);
-          if (!stopped && result && result.text.trim()) {
+          const onPicture =
+            !!pictureCode && !!result && sameCode(result.text, pictureCode) && qrTracker.isTracking(pictureCode);
+          if (!stopped && result && result.text.trim() && onPicture) {
+            onDetectedRef.current(result.text, qrTracker.latest!.anchor);
+          } else if (!stopped && result && result.text.trim()) {
+            pictureCode = null;
             qrTracker.seed(result.text, result.anchor);
             onDetectedRef.current(result.text, result.anchor);
           } else if (!stopped && tracked && qrTracker.isTracking(tracked.text)) {
@@ -116,9 +133,35 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
     };
     loop();
 
+    // Sticker pictures (book pages): runs next to the QR scan, in its own worker
+    let pictureTimer: number | undefined;
+    const pictureLoop = async () => {
+      if (stopped) return;
+      const video = videoRef.current;
+      const tracked = qrTracker.isTracking() ? qrTracker.latest : null;
+      const followingPicture = !!tracked && !!pictureCode && tracked.text === pictureCode;
+      if (video && imageDetector.active) {
+        try {
+          const hit = await imageDetector.detect(video, followingPicture ? pictureCode! : undefined);
+          // A QR sticker being tracked keeps priority over the picture of the same sticker
+          const onQr = !!tracked && !followingPicture && !!hit && sameCode(tracked.text, hit.text);
+          if (!stopped && hit && !onQr) {
+            pictureCode = hit.text;
+            qrTracker.seed(hit.text, hit.square, PICTURE_UNIT);
+            onDetectedRef.current(hit.text, hit.anchor);
+          }
+        } catch {
+          // skip frame
+        }
+      }
+      if (!stopped) pictureTimer = window.setTimeout(pictureLoop, qrTracker.isTracking() ? PICTURE_INTERVAL_TRACKING : PICTURE_INTERVAL);
+    };
+    pictureLoop();
+
     return () => {
       stopped = true;
       if (timer) window.clearTimeout(timer);
+      if (pictureTimer) window.clearTimeout(pictureTimer);
       qrTracker.stop();
     };
   }, [cameraError, isLoading, videoRef]);

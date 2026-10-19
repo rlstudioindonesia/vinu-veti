@@ -60,6 +60,7 @@ class QrTracker {
    */
   rotationSince: ((t: number) => THREE.Quaternion | null) | null = null;
   private lastCapture = 0;
+  private units = new Map<string, number>();
 
   private video: VideoWithRVFC | null = null;
   private canvas: HTMLCanvasElement | null = null;
@@ -129,9 +130,14 @@ class QrTracker {
     return this.ok && !!l && Date.now() - l.anchor.timestamp! < 250 && (text === undefined || l.text === text);
   }
 
-  /** A decode result: starts tracking, or corrects drift of the running track. */
-  seed(text: string, anchor: QRAnchor) {
+  /**
+   * A decode result: starts tracking, or corrects drift of the running track. `unit`: size of the
+   * reported square relative to the seeded one (a sticker picture is followed over its whole centred
+   * square, but the model stands on a smaller "sticker" in its middle, see imageDetector).
+   */
+  seed(text: string, anchor: QRAnchor, unit = 1) {
     if (!anchor.cornerPoints || anchor.cornerPoints.length !== 4) return;
+    this.units.set(text, unit);
     const scale = TRACK_W / anchor.videoWidth;
     const msg = {
       type: 'seed',
@@ -260,8 +266,9 @@ class QrTracker {
     if (!p || !this.running) return;
     this.ok = !!m.H;
     if (m.H) {
+      const unit = this.units.get(m.text) ?? 1;
       const corners = UNIT.map(([ux, uy]) => {
-        const [x, y] = project(m.H!, ux, uy);
+        const [x, y] = project(m.H!, ux * unit, uy * unit);
         return { x: x / p.scale, y: y / p.scale };
       });
       const xs = corners.map((c) => c.x);

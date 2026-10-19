@@ -72,12 +72,13 @@ async function main() {
   const manifest = await res.json();
   if (!Array.isArray(manifest.targets)) throw new Error('manifest.json tidak valid');
 
-  // Every file referenced by the manifest (models, extra animations, voices)
+  // Every file referenced by the manifest (models, extra animations, voices, pictures)
   const files = new Map();
   for (const t of manifest.targets) {
     if (t.model) files.set(t.model, { sha: t.modelSha, size: t.modelSize });
     for (const a of t.assets || []) files.set(a.file, { sha: a.sha, size: a.size });
     for (const v of Object.values(t.voices || {})) if (v?.file) files.set(v.file, { sha: v.sha, size: v.size });
+    if (t.picture?.file) files.set(t.picture.file, { sha: t.picture.sha, size: t.picture.size });
     if (t.audio && !files.has(t.audio)) files.set(t.audio, { sha: t.audioSha, size: t.audioSize });
   }
 
