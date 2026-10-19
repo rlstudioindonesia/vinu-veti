@@ -1,13 +1,15 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { ARQRTarget } from '../../types/arBook';
-import { loadGlbModel, normalizeModel } from '../../utils/modelLoader';
+import { loadGlbLight, normalizeModel } from '../../utils/modelLoader';
 import { resolveModelSource } from '../../services/db';
 
 interface GlbViewerPreviewProps {
   target: ARQRTarget;
   customBlobData?: Blob | ArrayBuffer | null;
 }
+
+const PREVIEW_TIMEOUT_MS = 60000;
 
 export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
   target,
@@ -20,6 +22,8 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
   // Size and height change with the sliders: applied every frame, without loading the model again
   const placementRef = useRef({ scale: target.modelScale || 1, elevation: target.elevationOffset || 0 });
   placementRef.current = { scale: target.modelScale || 1, elevation: target.elevationOffset || 0 };
+  // Shown over the preview: a big model takes a while on a phone, and may not open at all
+  const [status, setStatus] = useState<'empty' | 'loading' | 'ready' | 'failed' | 'heavy'>('empty');
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -53,6 +57,9 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
       console.warn('Preview WebGL context lost handled');
     };
     renderer.domElement.addEventListener('webglcontextlost', handleContextLost, false);
+    // GPU out of memory while showing this model (not the context released on purpose when the
+    // preview closes, see the cleanup below)
+    renderer.domElement.addEventListener('webglcontextlost', () => !isCancelled && setStatus('heavy'), false);
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setClearColor(0x000000, 0);
@@ -72,11 +79,17 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
     let isCancelled = false;
     const clock = new THREE.Clock();
 
+    // A preview that has not opened after this long: the model is too heavy for this device
+    const tooSlow = window.setTimeout(() => !isCancelled && setStatus((s) => (s === 'loading' ? 'heavy' : s)), PREVIEW_TIMEOUT_MS);
     const load = async () => {
       try {
         const source = customBlobData || (await resolveModelSource(target, 0));
-        if (!source) return;
-        const res = await loadGlbModel(source);
+        if (!source) {
+          if (!isCancelled) setStatus('empty');
+          return;
+        }
+        if (!isCancelled) setStatus('loading');
+        const res = await loadGlbLight(source);
         if (isCancelled) return;
 
         if (res.animations.length > 0) {
@@ -87,8 +100,10 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
 
         modelGroup = normalizeModel(res.scene).pivot;
         scene.add(modelGroup);
+        setStatus((s) => (s === 'heavy' ? s : 'ready'));
       } catch (e) {
         console.warn('Preview load error:', e);
+        if (!isCancelled) setStatus('failed');
       }
     };
 
@@ -111,6 +126,7 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
 
     return () => {
       isCancelled = true;
+      window.clearTimeout(tooSlow);
       if (animIdRef.current) cancelAnimationFrame(animIdRef.current);
       if (mixerRef.current) mixerRef.current.stopAllAction();
       mixerRef.current = null;
@@ -136,6 +152,19 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
   return (
     <div className="relative w-full h-44 rounded-xl overflow-hidden bg-slate-950/80 border border-slate-800 flex items-center justify-center">
       <div ref={mountRef} className="w-full h-full" />
+      {status === 'loading' && (
+        <div className="absolute inset-0 flex items-center justify-center gap-2 text-[11px] font-semibold text-emerald-300 pointer-events-none">
+          <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+          Memuat pratinjau…
+        </div>
+      )}
+      {(status === 'failed' || status === 'heavy') && (
+        <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-[11px] font-semibold text-amber-300 pointer-events-none">
+          {status === 'heavy'
+            ? 'Model terlalu berat untuk dipratinjau di perangkat ini. Kompres dulu (unggah dari browser laptop), atau kecilkan tekstur/poligon.'
+            : 'Pratinjau gagal dibuka. Pastikan file .glb tidak rusak (ekspor ulang dari Blender).'}
+        </div>
+      )}
       <span className="absolute bottom-2 left-2 text-[10px] text-emerald-400 font-mono bg-black/70 px-2 py-0.5 rounded-md border border-emerald-500/20">
         Pratinjau 3D
       </span>

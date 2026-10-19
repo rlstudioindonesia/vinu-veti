@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ARQRTarget, ARQRTargetAsset } from '../../types/arBook';
 import { ARDatabase, audioKey, resolveAudioSource, voiceOf } from '../../services/db';
 import { VOICE_LANGS, VoiceLang } from '../../types/arBook';
@@ -110,6 +110,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [pendingExtras, setPendingExtras] = useState<Record<string, PendingFile>>({});
   const [removedExtraIds, setRemovedExtraIds] = useState<string[]>([]);
   const [compressing, setCompressing] = useState<string | null>(null);
+  // Seconds the compression has been running (big models take a while: show it is still working)
+  const [compressSeconds, setCompressSeconds] = useState(0);
+  const isCompressing = compressing !== null;
+  useEffect(() => {
+    setCompressSeconds(0);
+    if (!isCompressing) return;
+    const start = Date.now();
+    const timer = window.setInterval(() => setCompressSeconds(Math.round((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [isCompressing]);
   const [autoCompress, setAutoCompress] = useState<boolean>(() => {
     try {
       return localStorage.getItem('vv_auto_compress') !== 'off';
@@ -225,6 +235,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
    */
   const maybeCompress = async (f: PendingFile): Promise<PendingFile> => {
     if (!autoCompress || f.data.byteLength < COMPRESS_ABOVE) return f;
+    // Compressing needs ~5x the file size in memory: on a phone with little memory a very big model
+    // would run for minutes and then fail (looking like a hang). Say so right away instead.
+    const deviceGb = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    if (deviceGb !== undefined && deviceGb <= 4 && f.data.byteLength > TOO_HEAVY_MB * 1048576) {
+      showNotice(
+        `File ${(f.data.byteLength / 1048576).toFixed(0)} MB terlalu besar untuk dikompres di perangkat ini. ` +
+          'Unggah dari menu admin di browser laptop agar dikompres, lalu publikasikan dari sana.'
+      );
+      return f;
+    }
     setCompressing('Mengompres model…');
     try {
       const { compressGlb } = await import('../../utils/glbCompress');
@@ -752,6 +772,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <div className="flex items-center gap-2 rounded-xl bg-emerald-600/20 px-3 py-2 text-[11px] font-semibold text-emerald-200">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
                     {compressing}
+                    {compressSeconds > 0 && <span className="ml-auto text-emerald-300/70">{compressSeconds} dtk</span>}
                   </div>
                 )}
 
