@@ -92,6 +92,30 @@ export function forgetPublishedDeletions(publishedIds: Set<string>) {
   saveDeletedPackIds(ids);
 }
 
+// When this device last published (epoch ms): stickers changed after it are not on other devices yet
+const PUBLISHED_AT_KEY = 'vv_last_publish_at';
+
+export function lastPublishedAt(): number {
+  try {
+    return Number(localStorage.getItem(PUBLISHED_AT_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function markPublishedAt(time: number) {
+  try {
+    localStorage.setItem(PUBLISHED_AT_KEY, String(time));
+  } catch {
+    // ignore
+  }
+}
+
+/** Created or changed on this device after its last publish: other devices do not have it yet. */
+export function isUnpublished(t: ARQRTarget, publishedAt = lastPublishedAt()): boolean {
+  return t.source === 'local' && t.updatedAt > publishedAt;
+}
+
 /** Published stickers deleted on this device whose deletion is not published yet. */
 export function pendingDeletionCount(): number {
   return deletedPackIds().size;
@@ -513,7 +537,9 @@ export interface SyncResult {
 
 export async function syncContentPack(
   onMetadataChanged?: () => void,
-  onProgress?: (p: SyncProgress) => void
+  onProgress?: (p: SyncProgress) => void,
+  // listOnly: update the sticker list but do not download files (used right before publishing)
+  options: { listOnly?: boolean } = {}
 ): Promise<SyncResult> {
   askPersistentStorage();
   const [bundled, remote] = await Promise.all([
@@ -570,8 +596,10 @@ export async function syncContentPack(
     // Deleted in the admin panel here and not published yet: keep it deleted
     if (deleted.has(p.id)) continue;
     const local = byId.get(p.id);
-    // Content made on this device in the admin panel always wins over the pack
-    if (local && local.source !== 'pack') continue;
+    // A sticker edited in this device's admin panel keeps its local version while it has changes
+    // that are not published yet, or when the online one is not newer. Once published, a newer online
+    // version (another admin device changed it, e.g. uploaded its model) replaces it.
+    if (local && local.source !== 'pack' && (isUnpublished(local) || !(p.updatedAt > local.updatedAt))) continue;
     const target = toTarget(p, base, local?.createdAt ?? Date.now());
 
     if (isRemote) {
@@ -633,6 +661,7 @@ export async function syncContentPack(
     }
   }
   if (changed) onMetadataChanged?.();
+  if (options.listOnly) return { downloaded: 0, failed: 0 };
 
   // Mirror changed files, two at a time (each one in parallel pieces; memory stays low on cheap
   // phones). Small files first, so most stickers work offline as early as possible.
@@ -696,8 +725,17 @@ export interface CollectedFile {
 export async function buildManifest(
   targets: ARQRTarget[],
   pathFor: (t: ARQRTarget, f: CollectedFile) => string,
-  onFile?: (t: ARQRTarget, f: CollectedFile, path: string) => Promise<void>
+  onFile?: (t: ARQRTarget, f: CollectedFile, path: string) => Promise<void>,
+  // Publishing: a file that is already online (known path, SHA-256 and size) is referenced as it is,
+  // without downloading it to this device first (e.g. models another admin device published)
+  reuseOnline?: (t: ARQRTarget, ref: PackFile & { sha: string; size: number }) => void
 ): Promise<ContentManifest> {
+  const online = (t: ARQRTarget, url: string | undefined, sha: string | undefined, size: number | undefined) => {
+    if (!reuseOnline || !isOnlineUrl(url) || !sha || !size) return null;
+    const ref = { file: url.slice(REMOTE_CONTENT_BASE.length), sha, size };
+    reuseOnline(t, ref);
+    return ref;
+  };
   const packTargets: PackTarget[] = [];
   for (const t of targets) {
     const p: PackTarget = {
@@ -720,8 +758,14 @@ export async function buildManifest(
       return { f, path };
     };
 
-    const main = await take(await resolveModelSource(t, 0), 'model', 'glb');
-    if (main) {
+    const mainRef = online(t, t.customGlbUrl, t.customGlbSha, t.customGlbSize);
+    const main = mainRef ? null : await take(await resolveModelSource(t, 0), 'model', 'glb');
+    if (mainRef) {
+      p.model = mainRef.file;
+      p.modelSha = mainRef.sha;
+      p.modelSize = mainRef.size;
+      p.modelName = t.customGlbFileName;
+    } else if (main) {
       p.model = main.path;
       p.modelSha = main.f.sha;
       p.modelSize = main.f.bytes.byteLength;
@@ -729,13 +773,21 @@ export async function buildManifest(
     }
     const extras = t.assets || [];
     for (let i = 0; i < extras.length; i++) {
+      const ref = online(t, extras[i].url, extras[i].sha, extras[i].size);
+      if (ref) {
+        p.assets!.push({ id: extras[i].id, name: extras[i].fileName, file: ref.file, sha: ref.sha, size: ref.size, scale: extras[i].scale });
+        continue;
+      }
       const r = await take(await resolveModelSource(t, i + 1), 'asset', 'glb', i);
       if (r) p.assets!.push({ id: extras[i].id, name: extras[i].fileName, file: r.path, sha: r.f.sha, size: r.f.bytes.byteLength, scale: extras[i].scale });
     }
     for (const lang of VOICE_LANGS) {
       const voice = voiceOf(t, lang);
       if (!voice) continue;
-      const r = await take(await resolveAudioSource(t, lang), 'audio', extOf(voice.name, 'mp3'), undefined, lang);
+      const ref = online(t, voice.url, voice.sha, voice.size);
+      const r = ref
+        ? { path: ref.file, f: { sha: ref.sha, bytes: { byteLength: ref.size } } }
+        : await take(await resolveAudioSource(t, lang), 'audio', extOf(voice.name, 'mp3'), undefined, lang);
       if (!r) continue;
       (p.voices ??= {})[lang] = { file: r.path, sha: r.f.sha, size: r.f.bytes.byteLength, name: voice.name };
       if (lang === 'id') {

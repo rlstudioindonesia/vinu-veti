@@ -738,6 +738,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         <CloudPublishCard
           targets={targets}
           onPublished={() => {
+            // Publishing first took in other devices' changes: show the current list
+            onRefreshTargets();
             setPublishedAt(lastPublishedAt());
             setPendingDeletions(pendingDeletionCount());
           }}
