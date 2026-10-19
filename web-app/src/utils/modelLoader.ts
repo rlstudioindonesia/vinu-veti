@@ -138,6 +138,16 @@ async function lightenForDevice(scene: THREE.Object3D): Promise<void> {
   );
 }
 
+/**
+ * Loads a model made lighter for this phone (see lightenForDevice), without keeping it in the cache:
+ * for previews (admin panel), where a big model at full texture size can run the phone out of memory.
+ */
+export async function loadGlbLight(source: string | ArrayBuffer | Blob): Promise<LoadedGLBResult> {
+  const loaded = await loadGlbModel(source);
+  await lightenForDevice(loaded.scene);
+  return loaded;
+}
+
 // Parsed models stay in memory for a while: flipping back to a page shows its character instantly
 // (no reading from storage, no decoding). Each use gets its own copy that shares geometry and
 // textures. The oldest models are dropped when the estimated memory use passes the budget, which

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ARQRTarget, ARQRTargetAsset } from '../../types/arBook';
 import { ARDatabase, audioKey, resolveAudioSource, voiceOf } from '../../services/db';
 import { VOICE_LANGS, VoiceLang } from '../../types/arBook';
@@ -52,6 +52,18 @@ const VOICE_LABELS: Record<VoiceLang, { flag: string; label: string }> = {
 
 // Models bigger than this are compressed automatically on upload
 const COMPRESS_ABOVE = 5 * 1024 * 1024;
+// Most QR slots made at once (see "Slot QR")
+const MAX_SLOTS = 100;
+
+/** QR text of sticker number n: VV-01 … VV-99, then VV-100 … */
+function qrCodeFor(n: number): string {
+  return `VV-${String(n).padStart(2, '0')}`;
+}
+
+/** A sticker without any model yet (a QR slot made in advance). */
+function isEmptySlot(t: ARQRTarget): boolean {
+  return !t.customGlbFileName && !t.customGlbUrl && !(t.assets && t.assets.length > 0);
+}
 // Models bigger than this (after compression) cannot be opened on many children's phones
 const TOO_HEAVY_MB = 40;
 
@@ -96,6 +108,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [editingTarget, setEditingTarget] = useState<ARQRTarget | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
+  // "QR slots": empty stickers made in advance so their QR codes can be printed in the book before
+  // the 3D models exist; a model uploaded later keeps the same QR code
+  const [slotDialog, setSlotDialog] = useState<boolean>(false);
+  const [slotCount, setSlotCount] = useState<number>(10);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState<boolean>(false);
@@ -110,6 +126,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [pendingExtras, setPendingExtras] = useState<Record<string, PendingFile>>({});
   const [removedExtraIds, setRemovedExtraIds] = useState<string[]>([]);
   const [compressing, setCompressing] = useState<string | null>(null);
+  // Seconds the compression has been running (big models take a while: show it is still working)
+  const [compressSeconds, setCompressSeconds] = useState(0);
+  const isCompressing = compressing !== null;
+  useEffect(() => {
+    setCompressSeconds(0);
+    if (!isCompressing) return;
+    const start = Date.now();
+    const timer = window.setInterval(() => setCompressSeconds(Math.round((Date.now() - start) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [isCompressing]);
   const [autoCompress, setAutoCompress] = useState<boolean>(() => {
     try {
       return localStorage.getItem('vv_auto_compress') !== 'off';
@@ -154,6 +180,55 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const closeForm = () => {
     resetForm();
     setEditingTarget(null);
+  };
+
+  /** The next `count` unused QR numbers (VV-01, VV-02… continuing after the highest one used). */
+  const nextQrNumbers = (count: number): number[] => {
+    const used = new Set(targets.map((t) => t.qrCode.trim().toLowerCase()));
+    const highest = targets.reduce((m, t) => {
+      const n = /^vv-(\d+)$/i.exec(t.qrCode.trim());
+      return n ? Math.max(m, parseInt(n[1], 10)) : m;
+    }, 0);
+    const out: number[] = [];
+    for (let n = highest + 1; out.length < count; n++) if (!used.has(qrCodeFor(n).toLowerCase())) out.push(n);
+    return out;
+  };
+
+  const handleCreateSlots = async () => {
+    const count = Math.max(1, Math.min(MAX_SLOTS, Math.round(slotCount) || 1));
+    const numbers = nextQrNumbers(count);
+    setIsBusy(true);
+    try {
+      const now = Date.now();
+      for (let i = 0; i < numbers.length; i++) {
+        const n = numbers[i];
+        await ARDatabase.saveTarget({
+          id: `slot-${now}-${n}`,
+          name: `Halaman ${n}`,
+          qrCode: qrCodeFor(n),
+          bookPage: n,
+          assets: [],
+          modelScale: 1.0,
+          elevationOffset: 0,
+          voices: {},
+          autoPlayAudio: true,
+          source: 'local',
+          createdAt: now + i,
+          updatedAt: now + i,
+        });
+      }
+      await onRefreshTargets();
+      setSlotDialog(false);
+      showNotice(
+        `${numbers.length} slot QR dibuat (${qrCodeFor(numbers[0])} s/d ${qrCodeFor(numbers[numbers.length - 1])}). ` +
+          'Cetak lewat tombol Cetak QR; model & suara bisa diunggah kapan saja tanpa mengubah QR.'
+      );
+    } catch (err) {
+      console.error('Slot creation failed:', err);
+      showNotice('Gagal membuat slot QR. Coba lagi.');
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const handleStartCreate = () => {
@@ -225,6 +300,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
    */
   const maybeCompress = async (f: PendingFile): Promise<PendingFile> => {
     if (!autoCompress || f.data.byteLength < COMPRESS_ABOVE) return f;
+    // Compressing needs ~5x the file size in memory: on a phone with little memory a very big model
+    // would run for minutes and then fail (looking like a hang). Say so right away instead.
+    const deviceGb = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    if (deviceGb !== undefined && deviceGb <= 4 && f.data.byteLength > TOO_HEAVY_MB * 1048576) {
+      showNotice(
+        `File ${(f.data.byteLength / 1048576).toFixed(0)} MB terlalu besar untuk dikompres di perangkat ini. ` +
+          'Unggah dari menu admin di browser laptop agar dikompres, lalu publikasikan dari sana.'
+      );
+      return f;
+    }
     setCompressing('Mengompres model…');
     try {
       const { compressGlb } = await import('../../utils/glbCompress');
@@ -380,10 +465,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
     const url = (editingTarget.customGlbUrl || '').trim();
     const hasStoredModel = !isCreatingNew && !!(await ARDatabase.getAssetBlob(editingTarget.id));
-    if (!pendingMain && !url && !hasStoredModel) {
-      setFormError('Unggah file model 3D .GLB atau isi tautan online .GLB terlebih dahulu.');
-      return;
-    }
+    // No model yet: saved as a QR slot (the code can be printed now, the model uploaded later)
+    const emptySlot = !pendingMain && !url && !hasStoredModel && !(editingTarget.assets || []).length;
 
     setIsBusy(true);
     setFormError(null);
@@ -419,7 +502,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         source: 'local',
       });
       await onRefreshTargets();
-      showNotice(`Stiker QR tersimpan & siap dipakai offline.${mirrorWarning}`);
+      showNotice(
+        emptySlot
+          ? 'Slot QR tersimpan tanpa model. QR-nya sudah bisa dicetak; unggah model kapan saja, kodenya tetap sama.'
+          : `Stiker QR tersimpan & siap dipakai offline.${mirrorWarning}`
+      );
       closeForm();
     } catch (err) {
       console.error('Save error:', err);
@@ -476,6 +563,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const modelLabel = (t: ARQRTarget) => {
+    if (isEmptySlot(t)) return 'Belum ada model · slot QR siap dicetak';
     const extra = t.assets?.length || 0;
     if (extra > 0) return `${1 + extra} gerakan (sentuh karakter untuk ganti)`;
     return t.customGlbFileName || 'Model .GLB';
@@ -500,6 +588,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             >
               <Printer className="w-3.5 h-3.5 text-emerald-400" />
               <span>Cetak QR</span>
+            </button>
+            <button
+              onClick={() => setSlotDialog(true)}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-white/10 active:scale-95"
+            >
+              <QrCode className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Slot QR</span>
             </button>
             <button
               onClick={handleStartCreate}
@@ -752,6 +847,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <div className="flex items-center gap-2 rounded-xl bg-emerald-600/20 px-3 py-2 text-[11px] font-semibold text-emerald-200">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
                     {compressing}
+                    {compressSeconds > 0 && <span className="ml-auto text-emerald-300/70">{compressSeconds} dtk</span>}
                   </div>
                 )}
 
@@ -958,6 +1054,57 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               >
                 {isBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
                 <span>Simpan Stiker QR</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {slotDialog && (
+        <div className="fixed inset-0 z-70 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl">
+            <h4 className="font-bold text-sm text-white mb-2 flex items-center gap-2">
+              <QrCode className="w-4 h-4 text-emerald-400" />
+              Buat Slot QR
+            </h4>
+            <p className="text-xs text-slate-400 mb-3 leading-relaxed">
+              Membuat stiker kosong dengan kode QR tetap, untuk dicetak di buku sekarang. Model 3D dan suaranya diunggah
+              nanti (edit stikernya): kode QR tidak berubah, jadi cetakan tetap berlaku.
+            </p>
+            <label className="block text-xs text-slate-300 mb-1">Jumlah slot</label>
+            <input
+              type="number"
+              min={1}
+              max={MAX_SLOTS}
+              value={slotCount}
+              onChange={(e) => setSlotCount(parseInt(e.target.value, 10) || 1)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-hidden focus:border-emerald-500"
+            />
+            {(() => {
+              const n = nextQrNumbers(Math.max(1, Math.min(MAX_SLOTS, Math.round(slotCount) || 1)));
+              return (
+                <p className="text-[11px] text-emerald-300 mt-2">
+                  Kode: <span className="font-mono font-bold">{qrCodeFor(n[0])}</span>
+                  {n.length > 1 && (
+                    <>
+                      {' '}s/d <span className="font-mono font-bold">{qrCodeFor(n[n.length - 1])}</span>
+                    </>
+                  )}{' '}
+                  (halaman {n[0]}
+                  {n.length > 1 ? `–${n[n.length - 1]}` : ''})
+                </p>
+              );
+            })()}
+            <div className="flex justify-end gap-3 mt-4">
+              <button onClick={() => setSlotDialog(false)} className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold">
+                Batal
+              </button>
+              <button
+                onClick={handleCreateSlots}
+                disabled={isBusy}
+                className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold"
+              >
+                Buat Slot
               </button>
             </div>
           </div>
