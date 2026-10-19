@@ -14,6 +14,7 @@ import { ARSafetyNotice } from './components/ARView/ARSafetyNotice';
 import type { ContentStatus } from './components/Portal/WelcomeScreen';
 import { loadSavedLang, useI18n } from './i18n';
 import { requestMotionPermission } from './utils/platform';
+import { currentRoute, leaveRoute, pushRoute, replaceRoute } from './utils/route';
 
 // Loaded on demand so the app starts fast: AR (three.js + QR scanner) is fetched in the background
 // right after the splash screen, the admin tools only when they are opened.
@@ -45,6 +46,15 @@ const ADMIN_UPDATE_CHECK_MS = 2000;
 // also show a visible "Guru & Ortu" button.
 const SHOW_ADMIN_BUTTON = import.meta.env.DEV || import.meta.env.VITE_ENABLE_ADMIN === 'true';
 
+/** Developer mode is open to this browser: admin account still logged in, or unlocked this session. */
+function isAdminAuthorized(): boolean {
+  try {
+    return !!getCloudUser() || sessionStorage.getItem('ar_admin_auth') === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function normalizeCode(code: string) {
   return (code || '').trim().toLowerCase();
 }
@@ -59,7 +69,11 @@ export default function App() {
   const [safetyAccepted, setSafetyAccepted] = useState<boolean>(false);
   const safetyAcceptedRef = useRef(false);
   safetyAcceptedRef.current = safetyAccepted;
-  const [currentView, setCurrentView] = useState<'portal' | 'ar' | 'admin'>('portal');
+  // Opened screen from the address (#/admin…): a refresh in developer mode stays there while the
+  // admin login is still valid. The camera is never reopened by a refresh (needs a tap + safety notice).
+  const [currentView, setCurrentView] = useState<'portal' | 'ar' | 'admin'>(() =>
+    currentRoute().startsWith('/admin') && isAdminAuthorized() ? 'admin' : 'portal'
+  );
   const [targets, setTargets] = useState<ARQRTarget[]>([]);
   const [activeTarget, setActiveTarget] = useState<ARQRTarget | null>(null);
   const [qrAnchor, setQrAnchor] = useState<QRAnchor | null>(null);
@@ -119,7 +133,9 @@ export default function App() {
   // Mirroring of online content to the phone (shown on the home screen)
   const [contentStatus, setContentStatus] = useState<ContentStatus>({ phase: 'idle', done: 0, total: 0 });
   const [isAdminLoginOpen, setIsAdminLoginOpen] = useState<boolean>(false);
-  const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(false);
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState<boolean>(
+    () => currentRoute() === '/admin/print' && isAdminAuthorized()
+  );
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState<boolean>(false);
 
   const loadTargetsFromDB = useCallback(async () => {
@@ -246,23 +262,66 @@ export default function App() {
     });
   }, []);
 
-  const openCamera = () => {
-    // Called from a tap: iPhone/iPad need it to allow the motion sensor and later voice playback
-    requestMotionPermission();
-    soundService.unlock();
+  const showCamera = useCallback(() => {
     resetAR();
     // Every time AR starts: show the safety notice first (supervision, surroundings)
     setSafetyAccepted(false);
     setCurrentView('ar');
+  }, [resetAR]);
+
+  const openCamera = () => {
+    // Called from a tap: iPhone/iPad need it to allow the motion sensor and later voice playback
+    requestMotionPermission();
+    soundService.unlock();
+    pushRoute('/ar');
+    showCamera();
+  };
+
+  const openAdmin = () => {
+    pushRoute('/admin');
+    setCurrentView('admin');
   };
 
   const handleOpenAdmin = () => {
-    if (getCloudUser() || sessionStorage.getItem('ar_admin_auth') === 'true') {
-      setCurrentView('admin');
-    } else {
-      setIsAdminLoginOpen(true);
+    if (isAdminAuthorized()) openAdmin();
+    else setIsAdminLoginOpen(true);
+  };
+
+  // Back from a screen (the app's own back buttons): to the screen it was opened from
+  const backToPortal = () => {
+    if (!leaveRoute('/')) {
+      resetAR();
+      setCurrentView('portal');
     }
   };
+
+  // Browser / Android back and forward buttons: show the screen of the address
+  useEffect(() => {
+    const onPopState = () => {
+      const route = currentRoute();
+      setIsPrintModalOpen(route === '/admin/print');
+      if (route.startsWith('/admin')) {
+        if (isAdminAuthorized()) setCurrentView('admin');
+        else {
+          replaceRoute('/');
+          setCurrentView('portal');
+        }
+      } else if (route === '/ar') {
+        showCamera();
+      } else {
+        resetAR();
+        setCurrentView('portal');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [resetAR, showCamera]);
+
+  // An address that cannot be shown after a refresh (camera, admin without login): home screen
+  useEffect(() => {
+    const route = currentRoute();
+    if (route === '/ar' || (route.startsWith('/admin') && !isAdminAuthorized())) replaceRoute('/');
+  }, []);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-black select-none font-sans">
@@ -290,10 +349,7 @@ export default function App() {
           {!safetyAccepted && <ARSafetyNotice onAccept={() => setSafetyAccepted(true)} />}
           <ARScannerOverlay
             activeTarget={qrAnchor ? activeTarget : null}
-            onBackToHome={() => {
-              resetAR();
-              setCurrentView('portal');
-            }}
+            onBackToHome={backToPortal}
           />
         </>
       )}
@@ -303,20 +359,30 @@ export default function App() {
           <AdminPanel
             targets={targets}
             onRefreshTargets={loadTargetsFromDB}
-            onClose={() => setCurrentView('portal')}
+            onClose={backToPortal}
             onTestCamera={openCamera}
-            onOpenPrintModal={() => setIsPrintModalOpen(true)}
+            onOpenPrintModal={() => {
+              pushRoute('/admin/print');
+              setIsPrintModalOpen(true);
+            }}
           />
         )}
 
-        {isPrintModalOpen && <QRStickerPrintModal targets={targets} onClose={() => setIsPrintModalOpen(false)} />}
+        {isPrintModalOpen && (
+          <QRStickerPrintModal
+            targets={targets}
+            onClose={() => {
+              if (!leaveRoute('/admin')) setIsPrintModalOpen(false);
+            }}
+          />
+        )}
 
         {isAdminLoginOpen && (
           <AdminLoginModal
             isOpen
             onSuccess={() => {
               setIsAdminLoginOpen(false);
-              setCurrentView('admin');
+              openAdmin();
             }}
             onClose={() => setIsAdminLoginOpen(false)}
           />

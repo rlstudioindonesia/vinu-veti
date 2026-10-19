@@ -9,6 +9,7 @@ import { soundService } from '../../services/soundService';
 import { GlbViewerPreview } from './GlbViewerPreview';
 import { CloudPublishCard } from './CloudPublishCard';
 import { sha256Hex } from '../../services/cloudConfig';
+import { currentRoute, leaveRoute, pushRoute, replaceRoute } from '../../utils/route';
 import {
   Plus,
   Trash2,
@@ -183,9 +184,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setPlayingVoice(null);
   };
 
-  const closeForm = () => {
+  const closeFormNow = () => {
     resetForm();
     setEditingTarget(null);
+  };
+
+  // The open form is part of the URL (#/admin/edit/<id>, #/admin/new): a refresh reopens it and
+  // the browser/Android back button closes it instead of leaving the admin page
+  const isFormRoute = (route: string) => route.startsWith('/admin/edit/') || route === '/admin/new';
+
+  const closeForm = () => {
+    // Going back fires popstate, which closes the form below
+    if (isFormRoute(currentRoute()) && leaveRoute('/admin')) return;
+    closeFormNow();
   };
 
   /** The next `count` unused QR numbers (VV-01, VV-02… continuing after the highest one used). */
@@ -257,6 +268,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       updatedAt: Date.now(),
     });
     setIsCreatingNew(true);
+    pushRoute('/admin/new');
   };
 
   const handleEdit = (target: ARQRTarget) => {
@@ -270,7 +282,45 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     delete copy.audioUrl;
     setEditingTarget(copy);
     setIsCreatingNew(false);
+    pushRoute(`/admin/edit/${encodeURIComponent(target.id)}`);
   };
+
+  const hasOpenForm = editingTarget !== null;
+  useEffect(() => {
+    const onPop = () => {
+      if (hasOpenForm && !isFormRoute(currentRoute())) closeFormNow();
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasOpenForm]);
+
+  // After a refresh: reopen the form the URL points at once the stickers are loaded
+  const [routeRestored, setRouteRestored] = useState(false);
+  useEffect(() => {
+    if (routeRestored) return;
+    const route = currentRoute();
+    if (route === '/admin/new') {
+      setRouteRestored(true);
+      handleStartCreate();
+      return;
+    }
+    if (!route.startsWith('/admin/edit/')) {
+      setRouteRestored(true);
+      return;
+    }
+    const id = decodeURIComponent(route.slice('/admin/edit/'.length));
+    const found = targets.find((t) => t.id === id);
+    if (found) {
+      setRouteRestored(true);
+      handleEdit(found);
+    } else if (targets.length > 0) {
+      // The sticker no longer exists (deleted on another device)
+      setRouteRestored(true);
+      replaceRoute('/admin');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targets, routeRestored]);
 
   const readFile = async (e: React.ChangeEvent<HTMLInputElement>): Promise<PendingFile | null> => {
     const file = e.target.files?.[0];
