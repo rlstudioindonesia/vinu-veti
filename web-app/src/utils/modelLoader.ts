@@ -21,12 +21,11 @@ function getLoader(): GLTFLoader {
     draco.setWorkerLimit(LOW_END ? 1 : 2);
     sharedLoader = new GLTFLoader();
     sharedLoader.setDRACOLoader(draco);
-    // Big Meshopt models are decoded in background threads: the camera view keeps running smoothly
-    try {
-      (MeshoptDecoder as typeof MeshoptDecoder & { useWorkers?: (n: number) => void }).useWorkers?.(Math.min(2, Math.max(1, (navigator.hardwareConcurrency || 2) - 1)));
-    } catch {
-      // No workers (very old browser): decoded on the main thread as before
-    }
+    // Meshopt geometry (every model compressed in the admin panel) is decoded on the main thread: it is
+    // WebAssembly and takes milliseconds. Do NOT call MeshoptDecoder.useWorkers(): it builds the worker
+    // from its functions' source text (decode.toString()), which the minified release build renames,
+    // so the worker failed ("workerProcess is not defined") and compressed models never finished
+    // loading in the app (only the unminified dev build worked).
     sharedLoader.setMeshoptDecoder(MeshoptDecoder);
   }
   return sharedLoader;
