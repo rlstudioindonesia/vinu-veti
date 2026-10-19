@@ -57,7 +57,7 @@ export const CloudPublishCard: React.FC<CloudPublishCardProps> = ({ targets, onP
     setMessage(null);
     setProgress({ done: 0, uploaded: 0, skipped: 0 });
     try {
-      const result = await publishToCloud(targets, setProgress);
+      const result = await publishToCloud(setProgress);
       const when = new Date().toLocaleString('id-ID');
       try {
         localStorage.setItem(LAST_PUBLISH_KEY, when);
