@@ -33,6 +33,12 @@ const QRStickerPrintModal = lazy(() =>
 const QR_LOST_TIMEOUT = 2500;
 // Content files that failed to download are tried again after this long while the app stays open
 const SYNC_RETRY_MS = 2 * 60 * 1000;
+// Checks for newly published content while the app stays open: at most this often when stickers are
+// scanned, and on a timer
+const SCAN_UPDATE_CHECK_MS = 10 * 1000;
+const PERIODIC_UPDATE_CHECK_MS = 2 * 60 * 1000;
+// Opening the developer menu is deliberate: check (almost) every time
+const ADMIN_UPDATE_CHECK_MS = 2000;
 
 // Admin tools are in every build. In the Play Store build the entry is hidden (tap the "VINU & VETI"
 // badge 7 times) and protected by the Supabase admin account. `npm run dev` and `npm run build:admin`
@@ -65,6 +71,8 @@ export default function App() {
   const activeTargetRef = useRef<ARQRTarget | null>(null);
   activeTargetRef.current = activeTarget;
   const qrLossTimerRef = useRef<number | null>(null);
+  // Set by the content sync below: checks the online list for updates (throttled)
+  const checkUpdatesRef = useRef<((minGapMs?: number) => void) | null>(null);
 
   // Stickers to prepare while one is shown: the next two in book order and the previous one
   // (children turn pages forward, sometimes back)
@@ -87,6 +95,11 @@ export default function App() {
       window.removeEventListener('vv-app-pause', onPause);
     };
   }, []);
+
+  // Opening the developer menu: fetch what other devices published meanwhile right away
+  useEffect(() => {
+    if (currentView === 'admin') checkUpdatesRef.current?.(ADMIN_UPDATE_CHECK_MS);
+  }, [currentView]);
 
   // Content updated while a sticker is shown (sync finished): switch to its new version, so the
   // updated model is loaded; a sticker that was unpublished is closed
@@ -126,12 +139,12 @@ export default function App() {
     // A request while a sync runs (e.g. the connection came back) is not lost: it runs right after
     let again = false;
     let retryTimer: number | undefined;
-    const sync = async (force = false) => {
+    const sync = async (force = false, minGapMs = 60000) => {
       if (running) {
         if (force) again = true;
         return;
       }
-      if (!force && Date.now() - lastRun < 60000) return;
+      if (!force && Date.now() - lastRun < minGapMs) return;
       window.clearTimeout(retryTimer);
       running = true;
       lastRun = Date.now();
@@ -168,9 +181,17 @@ export default function App() {
     const onOnline = () => sync(true);
 
     loadTargetsFromDB().then(() => sync(true));
+    // A model replaced and published while this app stays open must show up too: check when a sticker
+    // is scanned (see handleQRDetected) and every few minutes (the online list is a small file)
+    checkUpdatesRef.current = (minGapMs = SCAN_UPDATE_CHECK_MS) => sync(false, minGapMs);
+    const periodic = window.setInterval(() => {
+      if (document.visibilityState === 'visible') sync(false, PERIODIC_UPDATE_CHECK_MS - 5000);
+    }, PERIODIC_UPDATE_CHECK_MS);
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
+      checkUpdatesRef.current = null;
+      window.clearInterval(periodic);
       window.clearTimeout(retryTimer);
       window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
@@ -199,6 +220,8 @@ export default function App() {
     const clean = normalizeCode(code);
     const matched = targetsByCodeRef.current.get(clean);
     if (!matched) return;
+    // Is there a newer version of the content (e.g. its model was just replaced and published)?
+    checkUpdatesRef.current?.();
 
     if (activeTargetRef.current?.id !== matched.id) {
       soundService.playScanBeep();
