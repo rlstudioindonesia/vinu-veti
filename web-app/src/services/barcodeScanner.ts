@@ -406,9 +406,11 @@ export class BarcodeScannerService {
       }
       return null; // No QR in this frame
     }
-    const corners = qrCornersFromZxing(
-      result.points.map((p) => ({ x: src.x + p.x / scale, y: src.y + p.y / scale, moduleSize: p.moduleSize / scale }))
-    );
+    const corners = result.corners
+      ? result.corners.map((p) => ({ x: src.x + p.x / scale, y: src.y + p.y / scale }))
+      : qrCornersFromZxing(
+          result.points.map((p) => ({ x: src.x + p.x / scale, y: src.y + p.y / scale, moduleSize: p.moduleSize / scale }))
+        );
     if (!corners) return null;
     const xs = corners.map((p) => p.x);
     const ys = corners.map((p) => p.y);

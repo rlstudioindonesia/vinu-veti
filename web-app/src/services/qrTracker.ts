@@ -134,8 +134,10 @@ class QrTracker {
    * A decode result: starts tracking, or corrects drift of the running track. `unit`: size of the
    * reported square relative to the seeded one (a sticker picture is followed over its whole centred
    * square, but the model stands on a smaller "sticker" in its middle, see imageDetector).
+   * `tolerance`: how far (fraction of the side) a reading may differ from the running track before
+   * it replaces it (picture detections are less exact than QR decodes: they only fix real drift).
    */
-  seed(text: string, anchor: QRAnchor, unit = 1) {
+  seed(text: string, anchor: QRAnchor, unit = 1, tolerance?: number) {
     if (!anchor.cornerPoints || anchor.cornerPoints.length !== 4) return;
     this.units.set(text, unit);
     const scale = TRACK_W / anchor.videoWidth;
@@ -145,9 +147,10 @@ class QrTracker {
       corners: anchor.cornerPoints.map((p) => ({ x: p.x * scale, y: p.y * scale })),
       t: anchor.timestamp ?? Date.now(),
       mediaTime: anchor.mediaTime,
+      tolerance,
     };
     if (this.worker) this.worker.postMessage(msg);
-    else this.local?.seed(msg.text, msg.corners, msg.t, msg.mediaTime);
+    else this.local?.seed(msg.text, msg.corners, msg.t, msg.mediaTime, msg.tolerance);
   }
 
   private schedule() {

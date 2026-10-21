@@ -26,7 +26,7 @@ function track(m: { id: number; w: number; h: number; now: number; mediaTime: nu
 self.onmessage = (e: MessageEvent) => {
   const m = e.data;
   if (m.type === 'seed') {
-    core.seed(m.text, m.corners, m.t, m.mediaTime);
+    core.seed(m.text, m.corners, m.t, m.mediaTime, m.tolerance);
   } else if (m.type === 'reset') {
     core.reset();
   } else if (m.type === 'frame') {

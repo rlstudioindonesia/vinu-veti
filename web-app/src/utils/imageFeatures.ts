@@ -257,6 +257,7 @@ export interface Reference {
   h: number;
   features: Features;
   thumb: Gray; // small blurred copy (THUMB px long side) to verify detections
+  frontal: number; // keypoints of the picture seen straight on (how detailed it is)
 }
 
 const THUMB = 64;
@@ -277,10 +278,68 @@ export function buildReference(src: Gray): Reference {
     const lh = Math.round(h * f);
     levels.push(describe(f === 1 ? base : resize(base, lw, lh), k === 0 ? 400 : 260, w / lw, 20));
   }
+  const frontal = levels.reduce((n, f) => n + f.n, 0);
+  // The picture seen at a steep angle (from the side, from behind the book): corner patterns are
+  // squeezed in one direction and no longer match the frontal ones. Squeezed copies in 4 directions
+  // are described too, their keypoints mapped back to the picture (affine simulation, as in ASIFT).
+  for (const angle of TILT_DIRECTIONS) {
+    const c = Math.cos(angle);
+    const sn = Math.sin(angle);
+    // Squeeze along (c, sn) by TILT_SQUEEZE: M = R · diag(TILT_SQUEEZE, 1) · Rᵀ
+    const k = TILT_SQUEEZE;
+    const M = [c * c * k + sn * sn, c * sn * (k - 1), c * sn * (k - 1), sn * sn * k + c * c];
+    for (let lv = 0, f = 1; lv < 3 && Math.min(w, h) * f * k >= 90; lv++, f *= 0.72) {
+      const warped = warpAffine(base, M.map((v) => v * f));
+      const feats = describe(warped.img, 220, 1, 20);
+      const inv = invert2(M.map((v) => v * f));
+      for (let i = 0; i < feats.n; i++) {
+        const x = feats.x[i] - warped.tx;
+        const y = feats.y[i] - warped.ty;
+        feats.x[i] = inv[0] * x + inv[1] * y;
+        feats.y[i] = inv[2] * x + inv[3] * y;
+      }
+      levels.push(feats);
+    }
+  }
   const tw = Math.max(8, Math.round((w / Math.max(w, h)) * THUMB));
   const th = Math.max(8, Math.round((h / Math.max(w, h)) * THUMB));
   const thumb = { w: tw, h: th, data: blur(resize({ w, h, data: blur(base) }, tw, th)) };
-  return { w, h, features: concat(levels), thumb };
+  return { w, h, features: concat(levels), thumb, frontal };
+}
+
+const TILT_DIRECTIONS = [0, Math.PI / 4, Math.PI / 2, (3 * Math.PI) / 4];
+const TILT_SQUEEZE = 0.5; // ≈ 60° away from looking straight at the picture
+
+function invert2(m: number[]): number[] {
+  const det = m[0] * m[3] - m[1] * m[2];
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det];
+}
+
+/** The picture transformed by the 2×2 matrix `m` (row-major), fitted into a new image. */
+function warpAffine(src: Gray, m: number[]): { img: Gray; tx: number; ty: number } {
+  const xs = [0, src.w, 0, src.w].map((x, i) => m[0] * x + m[1] * (i < 2 ? 0 : src.h));
+  const ys = [0, src.w, 0, src.w].map((x, i) => m[2] * x + m[3] * (i < 2 ? 0 : src.h));
+  const tx = -Math.min(...xs) + BORDER;
+  const ty = -Math.min(...ys) + BORDER;
+  const w = Math.ceil(Math.max(...xs) - Math.min(...xs)) + 2 * BORDER;
+  const h = Math.ceil(Math.max(...ys) - Math.min(...ys)) + 2 * BORDER;
+  const inv = invert2(m);
+  const out = new Uint8Array(w * h).fill(128);
+  const d = src.data;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const u = inv[0] * (x - tx) + inv[1] * (y - ty);
+      const v = inv[2] * (x - tx) + inv[3] * (y - ty);
+      if (u < 0 || v < 0 || u >= src.w - 1 || v >= src.h - 1) continue;
+      const x0 = u | 0;
+      const y0 = v | 0;
+      const fx = u - x0;
+      const fy = v - y0;
+      const i = y0 * src.w + x0;
+      out[y * w + x] = (d[i] * (1 - fx) + d[i + 1] * fx) * (1 - fy) + (d[i + src.w] * (1 - fx) + d[i + src.w + 1] * fx) * fy;
+    }
+  }
+  return { img: { w, h, data: out }, tx, ty };
 }
 
 /** Features of a camera frame (already scaled to the analysis width). */
@@ -397,10 +456,12 @@ function convexQuad(c: Array<[number, number]>): boolean {
 }
 
 const MIN_INLIERS = 12;
+// Largest descriptor distance (of 256 bits) accepted as a match
+const MATCH_DIST = 56;
 
 /** Finds the reference picture in the frame. null when it is not (reliably) there. */
-export function detect(frame: Features, ref: Reference, frameW: number, frameH: number): Detection | null {
-  const m = match(frame, ref.features);
+export function detect(frame: Features, ref: Reference, frameW: number, frameH: number, matches?: Array<[number, number]>): Detection | null {
+  const m = matches ?? match(frame, ref.features);
   if (m.length < MIN_INLIERS) return null;
   const sx = new Float32Array(m.length);
   const sy = new Float32Array(m.length);
@@ -496,6 +557,12 @@ export function centreSquare(det: Detection, ref: Reference): Array<{ x: number;
   });
 }
 
+/** Ranks competing detections: matches that agree, weighted by how well the whole picture matches. */
+function score(d: Detection): number {
+  const sim = d.similarity < 0 ? 0.7 : d.similarity;
+  return d.inliers * sim * sim * sim;
+}
+
 // Fast lookup over the keypoints of all pictures (locality-sensitive hashing on descriptor bits):
 // a frame keypoint is only compared with the few reference keypoints that share a bucket
 const TABLES = 12;
@@ -527,6 +594,7 @@ export class ReferenceIndex {
   private refs = new Map<string, Reference>();
   private tables: Array<Map<number, number[]>> = [];
   private owner: string[] = []; // keypoint slot → picture key
+  private offset = new Map<string, number>(); // first keypoint slot of each picture
   private desc = new Uint32Array(0);
   private dirty = true;
   private seen = new Uint32Array(0);
@@ -562,7 +630,9 @@ export class ReferenceIndex {
     this.owner = new Array(total);
     this.tables = Array.from({ length: TABLES }, () => new Map<number, number[]>());
     let o = 0;
+    this.offset.clear();
     for (const [key, r] of this.refs) {
+      this.offset.set(key, o);
       this.desc.set(r.features.desc, o * WORDS);
       for (let k = 0; k < r.features.n; k++) {
         this.owner[o + k] = key;
@@ -577,38 +647,70 @@ export class ReferenceIndex {
     }
   }
 
-  /** Pictures that share the most close keypoints with the frame, best first. */
-  candidates(frame: Features, limit = 2): string[] {
+  /**
+   * Matches frame keypoints to the reference keypoints that share a hash bucket. Each frame keypoint
+   * gives its nearest keypoint, and the nearest one of another picture (pages of a book share
+   * characters, the right page must still get its matches). Result per picture: [frame kp, own kp].
+   */
+  private lookup(frame: Features, only?: string): Map<string, Array<[number, number]>> {
     if (this.dirty) this.rebuild();
-    const votes = new Map<string, number>();
+    const out = new Map<string, Array<[number, number]>>();
     if (this.seen.length < this.owner.length) this.seen = new Uint32Array(this.owner.length);
     const seen = this.seen;
     let compared = 0;
+    // Nearest keypoint of each of the 3 closest pictures (sorted by distance)
+    const bd = [0, 0, 0];
+    const bj = [-1, -1, -1];
     for (let i = 0; i < frame.n; i++) {
       const stamp = ++this.stamp;
-      let best = 51;
-      let bestOwner = '';
+      bd.fill(MATCH_DIST + 1);
+      bj.fill(-1);
       for (let t = 0; t < TABLES; t++) {
         const bucket = this.tables[t].get(hashOf(frame.desc, i, t));
         if (!bucket) continue;
         for (const j of bucket) {
           if (seen[j] === stamp) continue;
           seen[j] = stamp;
+          const owner = this.owner[j];
+          if (only && owner !== only) continue;
           compared++;
           let d = 0;
-          for (let k = 0; k < WORDS && d < best; k++) d += popcount(frame.desc[i * WORDS + k] ^ this.desc[j * WORDS + k]);
-          if (d < best) {
-            best = d;
-            bestOwner = this.owner[j];
+          for (let k = 0; k < WORDS && d < bd[2]; k++) d += popcount(frame.desc[i * WORDS + k] ^ this.desc[j * WORDS + k]);
+          if (d >= bd[2]) continue;
+          // Same picture already listed: keep its nearer keypoint; else insert in order
+          let slot = 2;
+          for (let s = 0; s < 3; s++) {
+            if (bj[s] >= 0 && this.owner[bj[s]] === owner) {
+              slot = s;
+              break;
+            }
+          }
+          if (d >= bd[slot]) continue;
+          bd[slot] = d;
+          bj[slot] = j;
+          for (let s = slot; s > 0 && bd[s] < bd[s - 1]; s--) {
+            [bd[s], bd[s - 1]] = [bd[s - 1], bd[s]];
+            [bj[s], bj[s - 1]] = [bj[s - 1], bj[s]];
           }
         }
       }
-      if (bestOwner) votes.set(bestOwner, (votes.get(bestOwner) ?? 0) + 1);
+      for (const j of bj) {
+        if (j < 0) continue;
+        const key = this.owner[j];
+        let list = out.get(key);
+        if (!list) out.set(key, (list = []));
+        list.push([i, j - this.offset.get(key)!]);
+      }
     }
     this.compared = compared;
-    return [...votes.entries()]
-      .filter(([, v]) => v >= 6)
-      .sort((a, b) => b[1] - a[1])
+    return out;
+  }
+
+  /** Pictures that share the most close keypoints with the frame, best first. */
+  candidates(frame: Features, limit = 2): string[] {
+    return [...this.lookup(frame).entries()]
+      .filter(([, v]) => v.length >= MIN_INLIERS)
+      .sort((a, b) => b[1].length - a[1].length)
       .slice(0, limit)
       .map(([k]) => k);
   }
@@ -618,14 +720,24 @@ export class ReferenceIndex {
    * being tracked already; this corrects drift).
    */
   find(frame: Features, frameW: number, frameH: number, only?: string): { key: string; det: Detection } | null {
-    const keys = only ? (this.refs.has(only) ? [only] : []) : this.candidates(frame, 3);
+    if (only && !this.refs.has(only)) return null;
+    const matches = this.lookup(frame, only);
+    const keys = [...matches.entries()]
+      .filter(([, v]) => v.length >= MIN_INLIERS)
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 3)
+      .map(([k]) => k);
     const found = keys
-      .map((key) => ({ key, det: detect(frame, this.refs.get(key)!, frameW, frameH) }))
+      .map((key) => ({ key, det: detect(frame, this.refs.get(key)!, frameW, frameH, matches.get(key)) }))
       .filter((r): r is { key: string; det: Detection } => !!r.det)
-      .sort((a, b) => b.det.inliers - a.det.inliers);
+      .sort((a, b) => score(b.det) - score(a.det));
     if (found.length === 0) return null;
-    // Pages of one book share characters: the winner must be clearly better than the runner-up
-    if (found.length > 1 && found[1].det.inliers > found[0].det.inliers * 0.75) return null;
+    // Pages of one book share characters: the winner must be clearly better than the runner-up,
+    // by its matches or by how much of the whole picture looks right
+    if (found.length > 1) {
+      const [a, b] = found;
+      if (score(b.det) > score(a.det) * 0.8 && Math.abs(a.det.similarity - b.det.similarity) < 0.06) return null;
+    }
     return found[0];
   }
 }

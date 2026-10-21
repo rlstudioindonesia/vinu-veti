@@ -133,7 +133,7 @@ async function pictureQualityOf(blob: Blob): Promise<'good' | 'fair' | 'poor'> {
   ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close();
   const ref = buildReference(toGray(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height));
-  const n = ref.features.n;
+  const n = ref.frontal;
   return n >= 900 ? 'good' : n >= 400 ? 'fair' : 'poor';
 }
 

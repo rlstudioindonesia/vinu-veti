@@ -109,6 +109,12 @@ const STRINGS = {
   tooDark: { id: 'Terlalu gelap? Nyalakan lampu', en: 'Too dark? Turn on the light', tl: 'Masyadong madilim? Buksan ang ilaw' },
   torchOn: { id: 'Nyalakan lampu', en: 'Turn on light', tl: 'Buksan ang ilaw' },
   torchOff: { id: 'Matikan lampu', en: 'Turn off light', tl: 'Patayin ang ilaw' },
+  gestureHint: {
+    id: 'Geser untuk memutar · cubit dua jari untuk zoom',
+    en: 'Swipe to turn · pinch with two fingers to zoom',
+    tl: 'I-swipe para paikutin · i-pinch para mag-zoom',
+  },
+  resetView: { id: 'Atur ulang', en: 'Reset', tl: 'I-reset' },
   tapToChange: { id: 'Sentuh karakternya untuk ganti gerakan!', en: 'Touch the character to change its move!', tl: 'Pindutin ang karakter para magpalit ng galaw!' },
   // AR safety notice (shown every time the AR camera starts; Google Play Families policy)
   safetyTitle: { id: 'Sebelum Bermain AR', en: 'Before You Play AR', tl: 'Bago Maglaro ng AR' },

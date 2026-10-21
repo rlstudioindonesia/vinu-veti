@@ -8,7 +8,7 @@ import { forgetModel, isModelCached, loadGlbCached, modelCacheRoom, normalizeMod
 import { qrTracker } from '../../services/qrTracker';
 import { focalFromVideo, Point2, qrPoseFromCorners } from '../../utils/qrPose';
 import { GravityTracker, GyroTracker, QrPoseStabilizer, uprightPose } from '../../utils/poseFilter';
-import { Hand, AlertTriangle, RotateCw } from 'lucide-react';
+import { Hand, AlertTriangle, RotateCw, RotateCcw } from 'lucide-react';
 import { useI18n } from '../../i18n';
 import { isLowEndDevice } from '../../utils/platform';
 
@@ -37,7 +37,16 @@ interface Step {
 // Taps this close to the character (screen px) also count, so small fingers do not miss it
 const TAP_PADDING_PX = 36;
 // Finger travel (screen px) before a sideways swipe starts turning the character
-const TURN_START_PX = 24;
+const TURN_START_PX = 16;
+// Turn per swipe distance (radians per screen px): a swipe across the screen ≈ one full turn
+const TURN_PER_PX = 0.016;
+// After a flick the character keeps turning and slows down with this time constant (s)
+const SPIN_DECAY_S = 0.5;
+// Zoom range (pinch / mouse wheel), relative to the sticker's own size
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 6;
+// The shown turn and size ease towards the finger's (s): smooth, but still directly under the finger
+const VIEW_EASE_S = 0.05;
 // Little "jump" when the character is touched
 const BOUNCE_MS = 280;
 // Loading a character never spins forever: shader compilation (it can hang when the GPU runs out of
@@ -155,6 +164,18 @@ const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion();
 
+// The turn / zoom hint is shown the first few times a character appears
+function gestureHintsLeft(): number {
+  try {
+    const n = Number(localStorage.getItem('vv_gesture_hint') || 0);
+    if (n >= 3) return 0;
+    localStorage.setItem('vv_gesture_hint', String(n + 1));
+    return 3 - n;
+  } catch {
+    return 0;
+  }
+}
+
 export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAnchor, onModelShown }) => {
   const { t: tr, lang } = useI18n();
   const onShownRef = useRef(onModelShown);
@@ -197,13 +218,18 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
   // Pictures drawn per second (diagnostics: follows the camera frame rate)
   const drawFpsRef = useRef(0);
 
-  // Touch interaction
+  // Touch interaction: turn (swipe / two-finger twist, any number of full turns) and zoom (pinch).
+  // yaw/userScale follow the fingers; the shown values ease towards them every frame.
   const yawRef = useRef<number>(0);
   const userScaleRef = useRef<number>(1);
-  const pointerRef = useRef<{ down: boolean; x: number; y: number; startX: number; startY: number; turning: boolean }>({
-    down: false, x: 0, y: 0, startX: 0, startY: 0, turning: false,
+  const viewRef = useRef({ yaw: 0, scale: 1, spin: 0 }); // shown turn, shown size, flick speed (rad/s)
+  const pointerRef = useRef<{ down: boolean; x: number; y: number; t: number; startX: number; startY: number; turning: boolean }>({
+    down: false, x: 0, y: 0, t: 0, startX: 0, startY: 0, turning: false,
   });
-  const pinchRef = useRef<{ dist: number; base: number } | null>(null);
+  const pinchRef = useRef<{ dist: number; angle: number; base: number } | null>(null);
+  // Turned or zoomed away from the start: the reset button is shown
+  const [viewChanged, setViewChanged] = useState(false);
+  const [showGestureHint, setShowGestureHint] = useState(false);
 
   const [loadingModel, setLoadingModel] = useState<boolean>(false);
   // What the loading is doing now (shown, so a screenshot tells where a slow phone is stuck)
@@ -374,18 +400,27 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           // QR briefly not detected (motion blur): with a gyroscope the model stays put on the sticker;
           // without one, hide it soon so it does not float in the wrong place
           const lostFor = stab.msSinceMeasurement(now);
-          const smoothed = lostFor < (gyro.active ? 1000 : 500) ? stab.pose(delta) : null;
+          const smoothed = lostFor < (gyro.active ? 1500 : 600) ? stab.pose(delta) : null;
           const pose = smoothed ? uprightPose(smoothed, gravity.get()) : null;
           if (pose) {
             // Touch feedback: a quick squash-and-stretch jump
             const b = (now - bounceStartRef.current) / BOUNCE_MS;
             const bounce = b >= 0 && b < 1 ? 1 + 0.12 * Math.sin(b * Math.PI) : 1;
-            const size = BASE_MODEL_HEIGHT * (t.modelScale || 1) * userScaleRef.current * bounce;
+            // Turn and zoom from the fingers, eased; a flick keeps spinning for a moment
+            const view = viewRef.current;
+            if (!pointerRef.current.down && !pinchRef.current && Math.abs(view.spin) > 0.01) {
+              yawRef.current += view.spin * delta;
+              view.spin *= Math.exp(-delta / SPIN_DECAY_S);
+            }
+            const ease = 1 - Math.exp(-delta / VIEW_EASE_S);
+            view.yaw += (yawRef.current - view.yaw) * ease;
+            view.scale *= Math.pow(userScaleRef.current / view.scale, ease);
+            const size = BASE_MODEL_HEIGHT * (t.modelScale || 1) * view.scale * bounce;
             baseMatrixRef.current = (baseMatrixRef.current ?? new THREE.Matrix4())
               .copy(pose)
               .multiply(STAND_ON_QR)
               .multiply(_m1.makeTranslation(0, t.elevationOffset || 0, 0))
-              .multiply(_m1.makeRotationY(yawRef.current))
+              .multiply(_m1.makeRotationY(view.yaw))
               .multiply(_m1.makeScale(size, size, size));
             want = model.children.some((c) => c.visible);
             if (want && !announcedRef.current) {
@@ -420,7 +455,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
         const p0 = _v1.setFromMatrixPosition(model.matrix).project(camera);
         at = [((p0.x + 1) / 2) * (container.clientWidth || window.innerWidth), ((1 - p0.y) / 2) * (container.clientHeight || window.innerHeight)];
       }
-      (window as unknown as { __vvAR?: object }).__vvAR = { presence: presenceRef.current, outgoing: outgoingRef.current.length, at, rq, dist: stabilizerRef.current.distance(), draw: drawFpsRef.current, track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
+      (window as unknown as { __vvAR?: object }).__vvAR = { yaw: viewRef.current.yaw, zoom: viewRef.current.scale, presence: presenceRef.current, outgoing: outgoingRef.current.length, at, rq, dist: stabilizerRef.current.distance(), draw: drawFpsRef.current, track: `${qrTracker.mode} ${qrTracker.fps}fps ${qrTracker.ms.toFixed(1)}ms` };
 
       // Character of the previous QR shrinking away while the new one appears
       const now2 = performance.now();
@@ -611,6 +646,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
     }, 1000);
     yawRef.current = 0;
     userScaleRef.current = 1;
+    viewRef.current = { yaw: 0, scale: 1, spin: 0 };
+    setViewChanged(false);
     const entries = getModelEntries(target);
     variantsRef.current = entries.map(() => null);
 
@@ -671,6 +708,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           if (stepsRef.current.length > 1) {
             setShowHint(true);
             window.setTimeout(() => setShowHint(false), 3500);
+          } else if (i === 0 && gestureHintsLeft() > 0) {
+            setShowGestureHint(true);
+            window.setTimeout(() => setShowGestureHint(false), 4000);
           }
         } catch (err) {
           console.warn('Model load failed:', entries[i]?.id, err);
@@ -790,8 +830,24 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
     };
   }, []);
 
+  const markViewChanged = () => {
+    const turned = Math.abs(Math.atan2(Math.sin(yawRef.current), Math.cos(yawRef.current))) > 0.05;
+    setViewChanged(turned || Math.abs(userScaleRef.current - 1) > 0.03 || Math.abs(viewRef.current.spin) > 0.3);
+  };
+
+  const resetView = () => {
+    // Back to the start the short way round (no extra full turns), at the sticker's own size
+    const view = viewRef.current;
+    view.yaw = Math.atan2(Math.sin(view.yaw), Math.cos(view.yaw));
+    view.spin = 0;
+    yawRef.current = 0;
+    userScaleRef.current = 1;
+    setViewChanged(false);
+  };
+
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    pointerRef.current = { down: true, x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, turning: false };
+    pointerRef.current = { down: true, x: e.clientX, y: e.clientY, t: performance.now(), startX: e.clientX, startY: e.clientY, turning: false };
+    viewRef.current.spin = 0; // touching stops a spin
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -802,18 +858,32 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
     if (!p.turning) {
       const dx = e.clientX - p.startX;
       const dy = e.clientY - p.startY;
-      if (Math.abs(dx) < TURN_START_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      if (Math.abs(dx) < TURN_START_PX || Math.abs(dx) < Math.abs(dy)) return;
       p.turning = true;
       p.x = e.clientX;
+      p.t = performance.now();
     }
-    yawRef.current += (e.clientX - p.x) * 0.01;
+    const now = performance.now();
+    const turn = (e.clientX - p.x) * TURN_PER_PX;
+    yawRef.current += turn;
+    // Flick speed, for the spin after letting go
+    const dt = Math.max(0.008, (now - p.t) / 1000);
+    viewRef.current.spin = viewRef.current.spin * 0.6 + (turn / dt) * 0.4;
     p.x = e.clientX;
     p.y = e.clientY;
+    p.t = now;
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     const p = pointerRef.current;
     p.down = false;
+    // A finger that stopped before letting go does not spin; a fast flick keeps turning (capped)
+    if (!p.turning || performance.now() - p.t > 80) viewRef.current.spin = 0;
+    viewRef.current.spin = THREE.MathUtils.clamp(viewRef.current.spin, -8, 8);
+    if (p.turning) {
+      markViewChanged(); // a swipe or a two-finger gesture, not a tap
+      return;
+    }
     const moved = Math.hypot(e.clientX - p.startX, e.clientY - p.startY);
     const root = modelRef.current;
     const camera = cameraRef.current;
@@ -842,22 +912,44 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
     }
   };
 
+  const twoFingers = (e: React.TouchEvent<HTMLDivElement>) => {
+    const [a, b] = [e.touches[0], e.touches[1]];
+    return { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), angle: Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) };
+  };
+
   const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     if (e.touches.length === 2) {
-      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-      pinchRef.current = { dist, base: userScaleRef.current };
+      const f = twoFingers(e);
+      pinchRef.current = { dist: Math.max(1, f.dist), angle: f.angle, base: userScaleRef.current };
+      pointerRef.current.down = false; // two fingers: no swipe and no tap
+      pointerRef.current.turning = true;
+      viewRef.current.spin = 0;
     }
   };
 
   const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 2 && pinchRef.current) {
-      const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-      userScaleRef.current = THREE.MathUtils.clamp(pinchRef.current.base * (dist / pinchRef.current.dist), 0.3, 3.5);
+    const pinch = pinchRef.current;
+    if (e.touches.length === 2 && pinch) {
+      const f = twoFingers(e);
+      // Pinch: zoom. Twist: turn the character with the fingers (clockwise on screen = clockwise)
+      userScaleRef.current = THREE.MathUtils.clamp(pinch.base * (f.dist / pinch.dist), MIN_ZOOM, MAX_ZOOM);
+      const twist = Math.atan2(Math.sin(f.angle - pinch.angle), Math.cos(f.angle - pinch.angle));
+      yawRef.current -= twist;
+      pinch.angle = f.angle;
     }
   };
 
   const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 0) pinchRef.current = null;
+    if (e.touches.length < 2 && pinchRef.current) {
+      pinchRef.current = null;
+      markViewChanged();
+    }
+  };
+
+  // Mouse wheel / trackpad (testing in a browser): zoom
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    userScaleRef.current = THREE.MathUtils.clamp(userScaleRef.current * Math.exp(-e.deltaY * 0.0015), MIN_ZOOM, MAX_ZOOM);
+    markViewChanged();
   };
 
   return (
@@ -870,6 +962,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+      onWheel={handleWheel}
     >
       <div ref={containerRef} className="w-full h-full" />
 
@@ -908,6 +1002,26 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
         <pre className="absolute bottom-6 left-3 right-3 whitespace-pre-wrap rounded-xl bg-black/75 px-3 py-2 text-[11px] leading-snug text-lime-300 pointer-events-none">
           {debugText}
         </pre>
+      )}
+
+      {viewChanged && qrAnchor && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onClick={resetView}
+          className="absolute bottom-24 right-4 flex items-center gap-1.5 bg-black/60 px-3 py-2 rounded-full border border-white/15 text-white text-[11px] font-semibold shadow-lg active:scale-95"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          {tr('resetView')}
+        </button>
+      )}
+
+      {showGestureHint && qrAnchor && !showHint && (
+        <div className="absolute top-18 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1.5 rounded-full border border-white/10 text-white/90 text-[11px] shadow-lg flex items-center gap-1.5 whitespace-nowrap">
+          <Hand className="w-3.5 h-3.5 text-emerald-400 animate-bounce" />
+          <span>{tr('gestureHint')}</span>
+        </div>
       )}
 
       {showHint && qrAnchor && (

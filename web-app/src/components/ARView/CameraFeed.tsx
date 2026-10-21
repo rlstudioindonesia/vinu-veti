@@ -18,7 +18,10 @@ const SCAN_INTERVAL_TRACKING = 250;
 // Sticker pictures: looked for this often (ms between searches) while nothing is tracked, and while
 // a picture is tracked only now and then, to confirm it and correct drift
 const PICTURE_INTERVAL = 120;
-const PICTURE_INTERVAL_TRACKING = 900;
+const PICTURE_INTERVAL_TRACKING = 500;
+// A picture detection replaces the running track only when they differ by more than this (fraction
+// of the picture's side): smaller differences are the detection's own inaccuracy, not drift
+const PICTURE_SEED_TOLERANCE = 0.03;
 
 function sameCode(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -147,7 +150,7 @@ export const CameraFeed: React.FC<CameraFeedProps> = ({ onBarcodeDetected, video
           const onQr = !!tracked && !followingPicture && !!hit && sameCode(tracked.text, hit.text);
           if (!stopped && hit && !onQr) {
             pictureCode = hit.text;
-            qrTracker.seed(hit.text, hit.square, PICTURE_UNIT);
+            qrTracker.seed(hit.text, hit.square, PICTURE_UNIT, PICTURE_SEED_TOLERANCE);
             onDetectedRef.current(hit.text, hit.anchor);
           }
         } catch {
