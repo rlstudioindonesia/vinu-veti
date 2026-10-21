@@ -93,8 +93,16 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 // Firebase, Room, Retrofit, Moshi and OkHttp from the project template were removed: the app does
 // not use them, and Firebase pulled in Google Play services with the outdated
 // androidx.fragment 1.1.0 that Google Play warns about.
+configurations.all {
+  resolutionStrategy {
+    force("androidx.fragment:fragment:1.8.6")
+    force("androidx.fragment:fragment-ktx:1.8.6")
+  }
+}
+
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
+  implementation(libs.androidx.fragment.ktx)
   implementation(libs.androidx.webkit)
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
