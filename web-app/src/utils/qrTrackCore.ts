@@ -12,6 +12,8 @@ export const LEVELS = 5; // pyramid levels: follows fast motion (up to ~50 px pe
 const GRID = 7; // GRID × GRID points on the QR
 const HISTORY = 10; // past frames kept (gray only) to apply a late decode to the right frame
 const MIN_INLIERS = 10;
+// A decode that differs from the running track by less than this (fraction of the side) is noise
+const SEED_TOLERANCE = 0.025;
 // Frames a lost track keeps trying from the last good frame (one blurred frame should not lose it)
 const MAX_COAST = 3;
 // QR unit square (y up), corners in the order TL, TR, BR, BL like the decoder's cornerPoints
@@ -78,7 +80,7 @@ export class TrackCore {
   private text = '';
   private lostFrames = 0;
   private coastPrior: number[] | null = null;
-  private pendingSeed: { text: string; corners: Point2[]; t: number; mediaTime?: number } | null = null;
+  private pendingSeed: { text: string; corners: Point2[]; t: number; mediaTime?: number; tolerance: number } | null = null;
 
   reset() {
     this.frames = [];
@@ -90,9 +92,12 @@ export class TrackCore {
     this.coastPrior = null;
   }
 
-  /** A decode result, corners (TL, TR, BR, BL) in tracking pixels: applied with the next frame. */
-  seed(text: string, corners: Point2[], t: number, mediaTime?: number) {
-    this.pendingSeed = { text, corners, t, mediaTime };
+  /**
+   * A decode result, corners (TL, TR, BR, BL) in tracking pixels: applied with the next frame.
+   * `tolerance`: drift (fraction of the side) below which a running track of the same code is kept.
+   */
+  seed(text: string, corners: Point2[], t: number, mediaTime?: number, tolerance = SEED_TOLERANCE) {
+    this.pendingSeed = { text, corners, t, mediaTime, tolerance };
   }
 
   /** Tracks the grid from one frame to another; returns the fitted homography or null. */
@@ -274,7 +279,7 @@ export class TrackCore {
           const [bx, by] = project(seedH, u.x, u.y);
           diff += Math.hypot(ax - bx, ay - by) / 4;
         }
-        agrees = diff < side * 0.025;
+        agrees = diff < side * seed.tolerance;
       }
       if (!agrees && seedH) {
         let H: number[] | null = seedH;

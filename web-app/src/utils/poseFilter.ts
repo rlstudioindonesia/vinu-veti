@@ -152,14 +152,15 @@ export class QrPoseStabilizer {
       this.flipCount = 0;
       // Rotation lock (see ROT_UNLOCK): judged on the averaged readings, so the noise of single
       // readings neither unlocks it nor keeps it from settling
-      this.rotAvg.slerp(q, angle > FLIP_ANGLE ? 1 : precise ? 0.2 : 0.35);
+      // While the sticker really turns (walking around it) the readings are followed closely: no lag
+      this.rotAvg.slerp(q, angle > FLIP_ANGLE ? 1 : precise ? (this.rotFollowing ? 0.5 : 0.2) : 0.35);
       const off = this.rot.angleTo(this.rotAvg);
       this.rotOffCount = off > ROT_DRIFT ? this.rotOffCount + 1 : 0;
       if (off > ROT_UNLOCK || this.rotOffCount > ROT_DRIFT_READINGS) this.rotFollowing = true;
       else if (off < ROT_SETTLE) this.rotFollowing = false;
       if (this.rotFollowing) {
         // Real turns: the bigger, the faster it is followed
-        const kRot = 0.12 + THREE.MathUtils.clamp((off - ROT_UNLOCK) / 0.2, 0, 1) * 0.4;
+        const kRot = (precise ? 0.3 : 0.12) + THREE.MathUtils.clamp((off - ROT_UNLOCK) / 0.2, 0, 1) * 0.4;
         this.rot.slerp(this.rotAvg, kRot);
       }
     }
