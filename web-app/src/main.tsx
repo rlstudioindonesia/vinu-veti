@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { I18nProvider } from './i18n';
+import { ErrorBoundary, reloadOnce } from './components/Common/ErrorBoundary';
 import '@fontsource/fredoka/latin-400.css';
 import '@fontsource/fredoka/latin-600.css';
 import '@fontsource/fredoka/latin-700.css';
@@ -24,8 +25,15 @@ if ('serviceWorker' in navigator) {
   }
 }
 
+// A build file that no longer exists (a newer version was published while the page was open): reload
+window.addEventListener('vite:preloadError', (event) => {
+  if (reloadOnce()) event.preventDefault();
+});
+
 createRoot(document.getElementById('root')!).render(
-  <I18nProvider>
-    <App />
-  </I18nProvider>
+  <ErrorBoundary>
+    <I18nProvider>
+      <App />
+    </I18nProvider>
+  </ErrorBoundary>
 );
