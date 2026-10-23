@@ -1,10 +1,15 @@
 /**
- * Copies the published online content (Supabase) into public/content before every build, so the APK
- * on the Play Store already contains every sticker, animation and voice: it works offline straight
- * after install / update. Newer content published later is still mirrored by the app when online.
+ * Copies the first pages of the published online content (Supabase) into public/content before every
+ * build (hybrid): those stickers work offline straight after install / update, the rest is downloaded
+ * by the app in the background, as before. Google Play limits the app itself to about 200 MB, so only
+ * up to CONTENT_BUNDLE_MB (default 120 MB) is taken, page by page from page 1; a sticker that does not
+ * fit any more is skipped and smaller later ones are still taken. The manifest written here is marked
+ * `partial`, so the app always switches to the complete online list once it is online. Content
+ * published later replaces the shipped copy automatically (files are compared by SHA-256).
  *
  * Runs automatically with `npm run build` / `npm run build:admin`. If the server can't be reached the
- * build continues with the content that is already in public/content.
+ * build continues with the content that is already in public/content. The content is not committed
+ * (see .gitignore): build the AAB on the computer that ran `npm run build`.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -36,6 +41,9 @@ const base = custom
   : supabase
     ? `${supabase}/storage/v1/object/public/${bucket}/`
     : '';
+
+// About 200 MB is the Play Store limit for the app itself; the rest of the app is small
+const BUDGET = Math.max(0, Number(env.CONTENT_BUNDLE_MB || 120)) * 1024 * 1024;
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 // Same as CHUNK_SIZE in src/services/cloudConfig.ts: bigger files are stored online in parts
@@ -72,14 +80,35 @@ async function main() {
   const manifest = await res.json();
   if (!Array.isArray(manifest.targets)) throw new Error('manifest.json tidak valid');
 
-  // Every file referenced by the manifest (models, extra animations, voices, pictures)
+  // Files of one sticker (models, extra animations, voices, picture)
+  const filesOf = (t) => {
+    const out = new Map();
+    if (t.model) out.set(t.model, { sha: t.modelSha, size: t.modelSize });
+    for (const a of t.assets || []) out.set(a.file, { sha: a.sha, size: a.size });
+    for (const v of Object.values(t.voices || {})) if (v?.file) out.set(v.file, { sha: v.sha, size: v.size });
+    if (t.picture?.file) out.set(t.picture.file, { sha: t.picture.sha, size: t.picture.size });
+    if (t.audio && !out.has(t.audio)) out.set(t.audio, { sha: t.audioSha, size: t.audioSize });
+    return out;
+  };
+
+  // From the first page on, as long as it fits in the budget
+  const byPage = [...manifest.targets].sort(
+    (a, b) => (a.bookPage ?? Infinity) - (b.bookPage ?? Infinity) || String(a.qrCode).localeCompare(String(b.qrCode))
+  );
   const files = new Map();
-  for (const t of manifest.targets) {
-    if (t.model) files.set(t.model, { sha: t.modelSha, size: t.modelSize });
-    for (const a of t.assets || []) files.set(a.file, { sha: a.sha, size: a.size });
-    for (const v of Object.values(t.voices || {})) if (v?.file) files.set(v.file, { sha: v.sha, size: v.size });
-    if (t.picture?.file) files.set(t.picture.file, { sha: t.picture.sha, size: t.picture.size });
-    if (t.audio && !files.has(t.audio)) files.set(t.audio, { sha: t.audioSha, size: t.audioSize });
+  const included = [];
+  const skipped = [];
+  let planned = 0;
+  for (const t of byPage) {
+    const own = [...filesOf(t)].filter(([rel]) => !files.has(rel));
+    const size = own.reduce((sum, [, f]) => sum + (f.size || 0), 0);
+    if (planned + size > BUDGET) {
+      skipped.push(t);
+      continue;
+    }
+    planned += size;
+    for (const [rel, f] of own) files.set(rel, f);
+    included.push(t);
   }
 
   let downloaded = 0;
@@ -113,11 +142,17 @@ async function main() {
   }
 
   fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  // Same order as online; `partial`: the app uses the complete online list as soon as it is online
+  const keep = new Set(included.map((t) => t.id));
+  const bundled = { ...manifest, partial: skipped.length > 0, targets: manifest.targets.filter((t) => keep.has(t.id)) };
+  fs.writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(bundled, null, 2));
+  const pages = (list) => list.map((t) => t.bookPage ?? t.qrCode).join(', ');
   console.log(
-    `[konten] ${manifest.targets.length} stiker siap offline di APK: ${downloaded} file diunduh, ${kept} tetap, ` +
-      `${removed} dihapus (${(bytes / 1048576).toFixed(1)} MB).`
+    `[konten] ${included.length} dari ${manifest.targets.length} stiker ikut di APK (batas ${(BUDGET / 1048576).toFixed(0)} MB): ` +
+      `${downloaded} file diunduh, ${kept} tetap, ${removed} dihapus (${(bytes / 1048576).toFixed(1)} MB).`
   );
+  if (included.length) console.log(`[konten] Di APK (offline sejak instal): halaman ${pages(included)}`);
+  if (skipped.length) console.log(`[konten] Diunduh aplikasi saat online: halaman ${pages(skipped)}`);
 }
 
 main().catch((err) => {
