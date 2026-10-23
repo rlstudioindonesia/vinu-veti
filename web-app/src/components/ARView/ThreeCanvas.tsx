@@ -239,6 +239,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
   // Bumped to load the sticker again after a failed download (internet back, or a tap on the message)
   const [retry, setRetry] = useState(0);
   const [showHint, setShowHint] = useState<boolean>(false);
+  // The browser cannot draw 3D at all (graphics acceleration off, very old phone)
+  const [noWebgl, setNoWebgl] = useState(false);
 
   // Scene setup + render loop
   useEffect(() => {
@@ -251,7 +253,15 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
     cameraRef.current = camera;
 
     // Budget phones skip multisampling: costly there, and hardly visible at their pixel density
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: !LOW_END, powerPreference: 'default' });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: !LOW_END, powerPreference: 'default' });
+    } catch (err) {
+      // Without this the whole app stopped; the camera and QR reading keep working
+      console.warn('AR: WebGL not available', err);
+      setNoWebgl(true);
+      return;
+    }
     let pixelRatio = MAX_PIXEL_RATIO;
     renderer.setPixelRatio(pixelRatio);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -996,6 +1006,13 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
           </span>
           {loadError !== 'missing' && <RotateCw className="w-3.5 h-3.5" />}
         </button>
+      )}
+
+      {noWebgl && (
+        <div className="absolute bottom-24 left-4 right-4 mx-auto flex max-w-sm items-center gap-2 rounded-2xl bg-black/70 px-3 py-2 text-[11px] font-semibold text-amber-300">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{tr('noWebgl')}</span>
+        </div>
       )}
 
       {debugText && (

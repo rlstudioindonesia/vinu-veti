@@ -23,7 +23,7 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
   const placementRef = useRef({ scale: target.modelScale || 1, elevation: target.elevationOffset || 0 });
   placementRef.current = { scale: target.modelScale || 1, elevation: target.elevationOffset || 0 };
   // Shown over the preview: a big model takes a while on a phone, and may not open at all
-  const [status, setStatus] = useState<'empty' | 'loading' | 'ready' | 'failed' | 'heavy'>('empty');
+  const [status, setStatus] = useState<'empty' | 'loading' | 'ready' | 'failed' | 'heavy' | 'nogl'>('empty');
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -44,12 +44,19 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
         failIfMajorPerformanceCaveat: false,
       });
     } catch {
-      renderer = new THREE.WebGLRenderer({
-        alpha: true,
-        antialias: false,
-        powerPreference: 'default',
-        failIfMajorPerformanceCaveat: false,
-      });
+      try {
+        renderer = new THREE.WebGLRenderer({
+          alpha: true,
+          antialias: false,
+          powerPreference: 'default',
+          failIfMajorPerformanceCaveat: false,
+        });
+      } catch (err) {
+        // No 3D on this browser (graphics acceleration off, old graphics driver): the form stays usable
+        console.warn('Preview: WebGL not available', err);
+        setStatus('nogl');
+        return;
+      }
     }
 
     const handleContextLost = (e: Event) => {
@@ -156,6 +163,12 @@ export const GlbViewerPreview: React.FC<GlbViewerPreviewProps> = ({
         <div className="absolute inset-0 flex items-center justify-center gap-2 text-[11px] font-semibold text-emerald-300 pointer-events-none">
           <div className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
           Memuat pratinjau…
+        </div>
+      )}
+      {status === 'nogl' && (
+        <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-[11px] font-semibold text-amber-300 pointer-events-none">
+          Pratinjau 3D tidak bisa tampil di browser ini (3D/WebGL mati). Di Chrome: Setelan → Sistem → nyalakan
+          &quot;Gunakan akselerasi grafis&quot;, lalu buka ulang Chrome. Unggah &amp; simpan tetap bisa.
         </div>
       )}
       {(status === 'failed' || status === 'heavy') && (

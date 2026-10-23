@@ -20,9 +20,21 @@ function serviceWorker(): Plugin {
 const CACHE = 'vv-app-${version}';
 const PRECACHE = ${JSON.stringify(['./', ...files, ...STATIC_FILES])};
 
+// A missing file is answered with the app page (single-page hosting), e.g. while a new version is
+// still being published. Such a page must never be kept in place of a script / style / image,
+// otherwise that screen (admin, camera) cannot open until the next version.
+function usable(path, res) {
+  if (!res || !res.ok) return false;
+  if (path === './' || /\\.html?$/.test(path)) return true;
+  return !(res.headers.get('content-type') || '').includes('text/html');
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((c) => Promise.all(PRECACHE.map((f) => c.add(f).catch(() => undefined)))).then(() => self.skipWaiting())
+    caches
+      .open(CACHE)
+      .then((c) => Promise.all(PRECACHE.map((f) => fetch(f, { cache: 'no-cache' }).then((res) => (usable(f, res) ? c.put(f, res) : undefined)).catch(() => undefined))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -57,9 +69,9 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(req, { ignoreSearch: true }).then(
       (hit) =>
-        hit ||
+        (usable(url.pathname, hit) && hit) ||
         fetch(req).then((res) => {
-          if (res.ok && !url.pathname.includes('/content/')) {
+          if (usable(url.pathname, res) && !url.pathname.includes('/content/')) {
             const copy = res.clone();
             caches.open(CACHE).then((c) => c.put(req, copy));
           }
