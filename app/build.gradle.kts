@@ -151,7 +151,7 @@ dependencies {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Content inside the APK (hybrid): the first pages of the published content, up to 120 MB, are
+// Content inside the APK (hybrid): the first pages of the published content, up to 30 MB, are
 // downloaded from Supabase while the app is built, so they work offline straight after install. The
 // app downloads the rest in the background and replaces changed files (SHA-256) by itself.
 // Runs in every build environment (AI Studio, Android Studio), no `npm run build` needed. Same rules
@@ -337,7 +337,7 @@ val bundleContent = tasks.register<BundleContentTask>("bundleContent") {
       else -> ""
     }
   )
-  budgetMb.set(webEnv["CONTENT_BUNDLE_MB"]?.toDoubleOrNull() ?: 120.0)
+  budgetMb.set(webEnv["CONTENT_BUNDLE_MB"]?.toDoubleOrNull() ?: 30.0)
   webContentDir.set(layout.projectDirectory.dir("src/main/assets/www/content"))
   // Kept between builds: unchanged files are not downloaded again
   outputDir.set(layout.buildDirectory.dir("generated/vvContent"))
