@@ -7,6 +7,7 @@ import { isUnpublished, lastPublishedAt } from '../../services/cloudPublish';
 import { CLOUD_PUBLISH_ENABLED } from '../../services/cloudConfig';
 import { soundService } from '../../services/soundService';
 import { GlbViewerPreview } from './GlbViewerPreview';
+import { Flag } from '../Common/Flag';
 import { CloudPublishCard } from './CloudPublishCard';
 import { sha256Hex } from '../../services/cloudConfig';
 import { currentRoute, leaveRoute, pushRoute, replaceRoute } from '../../utils/route';
@@ -842,7 +843,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     {VOICE_LANGS.some((l) => voiceOf(t, l)) && (
                       <span className="flex items-center gap-1 text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-md border border-sky-500/20">
                         <Music className="w-3 h-3" />
-                        Suara: {VOICE_LANGS.filter((l) => voiceOf(t, l)).map((l) => VOICE_LABELS[l].flag).join(' ')}
+                        Suara:
+                        {VOICE_LANGS.filter((l) => voiceOf(t, l)).map((l) => (
+                          <Flag key={l} lang={l} className="h-3 w-[18px]" title={VOICE_LABELS[l].label} />
+                        ))}
                       </span>
                     )}
                     {t.picture && (
@@ -1189,7 +1193,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   return (
                     <div key={lang} className="flex items-center justify-between gap-2 p-2 bg-slate-900 rounded-xl border border-slate-800">
                       <div className="flex items-center gap-2 overflow-hidden text-xs min-w-0">
-                        <span className="text-base shrink-0" title={VOICE_LABELS[lang].label}>{VOICE_LABELS[lang].flag}</span>
+                        <Flag lang={lang} className="h-4 w-6" title={VOICE_LABELS[lang].label} />
                         <label className="cursor-pointer px-2.5 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-[11px] font-semibold shrink-0">
                           {voice ? 'Ganti' : 'Pilih'}
                           <input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" onChange={(e) => handleVoiceUpload(lang, e)} className="hidden" />

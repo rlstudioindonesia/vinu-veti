@@ -46,6 +46,8 @@ const STRINGS = {
     tl: 'Buksan ang link na ito sa Safari para i-install.',
   },
   installLater: { id: 'Nanti saja', en: 'Later', tl: 'Mamaya na' },
+  installButton: { id: 'Pasang di iPhone', en: 'Install on iPhone', tl: 'I-install sa iPhone' },
+  installClose: { id: 'Tutup', en: 'Close', tl: 'Isara' },
   noContentAdmin: {
     id: 'Belum ada konten AR. Tambahkan stiker & model 3D di menu Guru & Ortu.',
     en: 'No AR content yet. Add stickers & 3D models in the Teachers & Parents menu.',
