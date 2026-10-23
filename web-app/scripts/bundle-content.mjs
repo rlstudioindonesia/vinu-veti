@@ -2,7 +2,7 @@
  * Copies the first pages of the published online content (Supabase) into public/content before every
  * build (hybrid): those stickers work offline straight after install / update, the rest is downloaded
  * by the app in the background, as before. Google Play limits the app itself to about 200 MB, so only
- * up to CONTENT_BUNDLE_MB (default 120 MB) is taken, page by page from page 1; a sticker that does not
+ * up to CONTENT_BUNDLE_MB (default 30 MB: light to install, the first pages work offline) is taken, page by page from page 1; a sticker that does not
  * fit any more is skipped and smaller later ones are still taken. The manifest written here is marked
  * `partial`, so the app always switches to the complete online list once it is online. Content
  * published later replaces the shipped copy automatically (files are compared by SHA-256).
@@ -43,7 +43,7 @@ const base = custom
     : '';
 
 // About 200 MB is the Play Store limit for the app itself; the rest of the app is small
-const BUDGET = Math.max(0, Number(env.CONTENT_BUNDLE_MB || 120)) * 1024 * 1024;
+const BUDGET = Math.max(0, Number(env.CONTENT_BUNDLE_MB ?? 30)) * 1024 * 1024;
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 // Same as CHUNK_SIZE in src/services/cloudConfig.ts: bigger files are stored online in parts
