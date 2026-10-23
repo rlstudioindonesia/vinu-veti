@@ -5,7 +5,7 @@ export type Lang = 'id' | 'en' | 'tl';
 export const LANGS: Array<{ code: Lang; label: string; flag: string }> = [
   { code: 'id', label: 'Bahasa Indonesia', flag: '🇮🇩' },
   { code: 'en', label: 'English', flag: '🇬🇧' },
-  { code: 'tl', label: 'Tagalog (Filipino)', flag: '🇵🇭' },
+  { code: 'tl', label: 'Filipino', flag: '🇵🇭' },
 ];
 
 const STRINGS = {

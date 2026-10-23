@@ -51,7 +51,7 @@ interface PendingFile {
 const VOICE_LABELS: Record<VoiceLang, { flag: string; label: string }> = {
   id: { flag: '🇮🇩', label: 'Indonesia' },
   en: { flag: '🇬🇧', label: 'English' },
-  tl: { flag: '🇵🇭', label: 'Tagalog' },
+  tl: { flag: '🇵🇭', label: 'Filipino' },
 };
 
 // Models bigger than this are compressed automatically on upload
