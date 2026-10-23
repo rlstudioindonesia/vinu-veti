@@ -2,6 +2,6 @@ Konten bawaan APK (hybrid): halaman-halaman awal, maksimal 120 MB, bisa dipakai 
 Sisanya diunduh aplikasi di latar belakang saat online, dan konten yang diperbarui lewat Publikasikan
 otomatis mengganti salinan di APK (dibandingkan per file dengan SHA-256).
 
-Folder ini diisi otomatis oleh `npm run build` (di folder web-app) dari konten yang sudah dipublikasikan.
-Isinya TIDAK di-commit ke GitHub: build AAB di komputer yang menjalankan `npm run build`.
-Batas ukuran bisa diubah lewat web-app/.env.local, misalnya baris: CONTENT_BUNDLE_MB=100
+Biasanya folder ini kosong: build release Android (Gradle, tugas bundleContent) mengunduh konten itu
+sendiri. Bila `npm run build` dijalankan lebih dulu, konten diambil ke sini dan itu yang dipakai.
+Isinya TIDAK di-commit ke GitHub. Batas ukuran: web-app/.env.local, misalnya CONTENT_BUNDLE_MB=100
