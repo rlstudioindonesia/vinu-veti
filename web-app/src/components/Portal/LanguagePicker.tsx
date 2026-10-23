@@ -1,6 +1,8 @@
 import React from 'react';
 import { Lang, LANGS, useI18n } from '../../i18n';
 import { Cloud, Star, SKY_GRADIENT, MASCOT_SRC } from '../Common/Scenery';
+import { InstallButton } from './InstallHint';
+import { Flag } from '../Common/Flag';
 
 interface LanguagePickerProps {
   onDone: () => void;
@@ -44,11 +46,13 @@ export const LanguagePicker: React.FC<LanguagePickerProps> = ({ onDone }) => {
                 l.code === lang ? 'bg-gradient-to-b from-[#FFE55C] to-[#FFD21F] text-[#173A6B]' : 'bg-white text-[#173A6B]'
               }`}
             >
-              <span className="text-4xl leading-none">{l.flag}</span>
+              <Flag lang={l.code} className="h-8 w-12" />
               <span>{l.label}</span>
             </button>
           ))}
         </div>
+
+        <InstallButton />
       </div>
     </div>
   );

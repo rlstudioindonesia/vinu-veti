@@ -3,6 +3,7 @@ import { Lock, Volume2, VolumeX, ChevronRight, Sparkles } from 'lucide-react';
 import { soundService } from '../../services/soundService';
 import { LANGS, useI18n } from '../../i18n';
 import { InstallHint } from './InstallHint';
+import { Flag } from '../Common/Flag';
 import { MASCOT_SRC, Cloud, Star, Spark, Hills, Leaf, SKY_GRADIENT } from '../Common/Scenery';
 
 export interface ContentStatus {
@@ -79,7 +80,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onStartCamera, onO
               aria-label={t('language')}
               title={t('language')}
             >
-              {currentLang.flag}
+              <Flag lang={currentLang.code} className="h-5 w-7" />
             </button>
             <button
               onClick={toggleSound}
