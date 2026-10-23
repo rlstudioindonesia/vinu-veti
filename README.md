@@ -22,13 +22,15 @@ Menu admin ada di semua versi, tetapi tersembunyi:
 
 Hasil build masuk ke `app/src/main/assets/www`, lalu build APK/AAB di Android Studio.
 
-`npm run build` juga **mengambil halaman-halaman awal** konten yang sudah dipublikasikan (model, gerakan,
-suara 3 bahasa) dari Supabase ke `web-app/public/content`, **maksimal 120 MB** (batas Play Store ±200 MB),
-mulai halaman 1; stiker yang tidak muat dilewati. Itu ikut di dalam APK, jadi halaman-halaman awal langsung
-bisa dipakai **tanpa internet** sejak instal (hybrid). Sisanya diunduh aplikasi di latar belakang saat online,
-dan konten yang diperbarui lewat **Publikasikan** otomatis mengganti salinan di APK (hanya file yang berubah).
-Konten ini **tidak di-commit** ke GitHub: jalankan `npm run build` lalu build AAB di komputer yang sama,
-yang terhubung internet. Batas bisa diubah di `web-app/.env.local`, misalnya `CONTENT_BUNDLE_MB=100`.
+**Konten bawaan APK (hybrid):** build **release** Android (AAB untuk Play Store, juga dari AI Studio)
+otomatis mengunduh halaman-halaman awal konten yang sudah dipublikasikan (model, gerakan, suara 3 bahasa)
+dari Supabase, **maksimal 120 MB** (batas Play Store ±200 MB), mulai halaman 1; stiker yang tidak muat
+dilewati. Halaman itu langsung bisa dipakai **tanpa internet** sejak instal. Sisanya diunduh aplikasi di
+latar belakang saat online, dan konten yang diperbarui lewat **Publikasikan** otomatis mengganti salinan di
+APK (hanya file yang berubah). Log build menampilkan baris `[konten] …` berisi halaman yang ikut.
+Tugas Gradle `bundleContent` di `app/build.gradle.kts`; batas bisa diubah di `web-app/.env.local`
+(`CONTENT_BUNDLE_MB=100`). Konten ini tidak di-commit ke GitHub. Bila `npm run build` dijalankan lebih
+dulu, konten hasil script itu (`app/src/main/assets/www/content`) yang dipakai.
 
 ## Versi iPhone / iPad
 
