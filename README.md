@@ -22,12 +22,13 @@ Menu admin ada di semua versi, tetapi tersembunyi:
 
 Hasil build masuk ke `app/src/main/assets/www`, lalu build APK/AAB di Android Studio.
 
-`npm run build` juga **mengambil semua konten yang sudah dipublikasikan** (model, gerakan, suara 3 bahasa)
-dari Supabase ke `web-app/public/content`, sehingga ikut di dalam APK: begitu anak instal/update dari
-Play Store, semua QR langsung bisa dipakai **tanpa internet**. Konten yang dipublikasikan setelah rilis
-tetap diunduh otomatis saat online (hanya file yang berubah) dan tersimpan di HP.
-Jalankan build di komputer yang terhubung internet; jika server tidak terjangkau, build tetap jalan
-dengan konten yang sudah ada.
+`npm run build` juga **mengambil halaman-halaman awal** konten yang sudah dipublikasikan (model, gerakan,
+suara 3 bahasa) dari Supabase ke `web-app/public/content`, **maksimal 120 MB** (batas Play Store ±200 MB),
+mulai halaman 1; stiker yang tidak muat dilewati. Itu ikut di dalam APK, jadi halaman-halaman awal langsung
+bisa dipakai **tanpa internet** sejak instal (hybrid). Sisanya diunduh aplikasi di latar belakang saat online,
+dan konten yang diperbarui lewat **Publikasikan** otomatis mengganti salinan di APK (hanya file yang berubah).
+Konten ini **tidak di-commit** ke GitHub: jalankan `npm run build` lalu build AAB di komputer yang sama,
+yang terhubung internet. Batas bisa diubah di `web-app/.env.local`, misalnya `CONTENT_BUNDLE_MB=100`.
 
 ## Versi iPhone / iPad
 
@@ -56,8 +57,8 @@ Setup sekali: lihat [`docs/SUPABASE.md`](docs/SUPABASE.md).
 - **Kode / tampilan**: build ulang, naikkan `versionCode` & `versionName` di `app/build.gradle.kts`,
   unggah AAB baru ke Play Store.
 
-Opsional: konten bawaan APK (sudah ada sejak instal, tanpa internet sama sekali): ekspor ZIP dari admin,
-ekstrak ke `web-app/public/content/`, lalu `npm run build`.
+Konten bawaan APK ikut diperbarui otomatis setiap `npm run build` (lihat bagian Build); ZIP dari
+"Ekspor Paket Konten" cukup sebagai cadangan.
 
 ## Ikon & maskot
 

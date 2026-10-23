@@ -58,6 +58,8 @@ export interface ContentManifest {
   version: 1;
   updatedAt: number;
   targets: PackTarget[];
+  // Pack inside the APK holding only the first pages (the rest is online): never the full list
+  partial?: boolean;
 }
 
 const BUNDLED_BASE = new URL('./content/', window.location.href).href;
@@ -586,14 +588,16 @@ export async function syncContentPack(
   // Server unreachable (offline) but this phone already has online content: keep it as it is.
   // Falling back to the (older) bundled pack here would delete the mirrored stickers, also when an
   // earlier download was incomplete. Only a newer pack inside an updated APK replaces it.
-  if (!remote && REMOTE_CONTENT_BASE && remoteList > 0 && !(bundled && bundled.updatedAt > remoteList)) {
+  // A partial pack (first pages only) never replaces the online list: that would drop the other pages.
+  if (!remote && REMOTE_CONTENT_BASE && remoteList > 0 && (!bundled || bundled.partial || !(bundled.updatedAt > remoteList))) {
     return { downloaded: 0, failed: 0 };
   }
 
   let manifest = bundled;
   let base = BUNDLED_BASE;
-  // Same version online as inside the APK: use the APK copy, nothing to download
-  if (remote && (!bundled || remote.updatedAt > bundled.updatedAt)) {
+  // Same version online as inside the APK: use the APK copy, nothing to download. A partial APK copy:
+  // always the complete online list (files that are inside the APK are still read from there)
+  if (remote && (!bundled || bundled.partial || remote.updatedAt > bundled.updatedAt)) {
     manifest = remote;
     base = REMOTE_CONTENT_BASE;
   }

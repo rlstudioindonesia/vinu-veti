@@ -22,3 +22,9 @@ web-app/.env.local
 # Public Supabase config (anon key only) is committed on purpose
 !web-app/.env
 web-app/dist/
+# Content shipped inside the APK (first pages, up to 120 MB): filled by `npm run build` on the build
+# computer, too big for GitHub. Only the README stays in the repository.
+web-app/public/content/*
+!web-app/public/content/README.txt
+app/src/main/assets/www/content/*
+!app/src/main/assets/www/content/README.txt
