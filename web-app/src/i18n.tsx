@@ -107,6 +107,11 @@ const STRINGS = {
     en: 'The 3D model is not downloaded yet. Connect to the internet once',
     tl: 'Hindi pa na-download ang 3D model. Kumonekta sa internet nang isang beses',
   },
+  noWebgl: {
+    id: '3D tidak bisa tampil di browser ini. Nyalakan akselerasi grafis browser, atau pakai HP lain.',
+    en: '3D cannot be shown in this browser. Turn on graphics acceleration, or use another phone.',
+    tl: 'Hindi maipakita ang 3D sa browser na ito. I-on ang graphics acceleration, o gumamit ng ibang phone.',
+  },
   modelFailed: { id: 'Model 3D gagal dimuat', en: 'The 3D model could not be loaded', tl: 'Hindi ma-load ang 3D model' },
   tooDark: { id: 'Terlalu gelap? Nyalakan lampu', en: 'Too dark? Turn on the light', tl: 'Masyadong madilim? Buksan ang ilaw' },
   torchOn: { id: 'Nyalakan lampu', en: 'Turn on light', tl: 'Buksan ang ilaw' },

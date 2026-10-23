@@ -12,7 +12,20 @@ export function isChunkLoadError(err: unknown): boolean {
   return /dynamically imported module|Importing a module script failed|error loading dynamically|ChunkLoadError|Unable to preload CSS|MIME type/i.test(msg);
 }
 
-/** Reloads the page once; false when it was just reloaded (to avoid a reload loop). */
+/**
+ * Empties the offline copy of the app (web version), so the next load fetches every build file
+ * fresh. Downloaded content (models, voices) is kept: it lives in IndexedDB, not here.
+ */
+async function clearAppCache(): Promise<void> {
+  try {
+    const keys = (await window.caches?.keys()) ?? [];
+    await Promise.all(keys.filter((k) => k.startsWith('vv-app-')).map((k) => caches.delete(k)));
+  } catch {
+    // ignore
+  }
+}
+
+/** Reloads the page fresh; false when that just happened (to avoid a reload loop). */
 export function reloadOnce(): boolean {
   try {
     const last = Number(sessionStorage.getItem(RELOAD_KEY) || 0);
@@ -21,8 +34,14 @@ export function reloadOnce(): boolean {
   } catch {
     return false;
   }
-  window.location.reload();
+  void reloadFresh();
   return true;
+}
+
+/** Reload after emptying the offline copy of the app. */
+export async function reloadFresh(): Promise<void> {
+  await clearAppCache();
+  window.location.reload();
 }
 
 interface State {
@@ -51,7 +70,7 @@ export class ErrorBoundary extends React.Component<{ children: React.ReactNode }
           <p className="text-lg font-bold">Ada yang tidak beres</p>
           <p className="mt-1 text-sm font-semibold text-[#173A6B]/80">Something went wrong · Nagkaroon ng problema</p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => void reloadFresh()}
             className="mt-4 w-full rounded-full bg-gradient-to-b from-[#1BA7A0] to-[#0E6B7A] py-3 font-bold text-white shadow-[0_4px_0_#0B5560] active:translate-y-0.5"
           >
             Muat ulang · Reload
