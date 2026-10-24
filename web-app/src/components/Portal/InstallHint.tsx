@@ -5,6 +5,8 @@ import { isAndroid, isAndroidApp, isAndroidInAppBrowser, isIOS, isStandalone } f
 import { promptInstall, useCanPromptInstall } from '../../utils/installPrompt';
 
 const DISMISS_KEY = 'vv_install_hint_dismissed';
+// The same app on the Play Store (Android)
+export const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.aistudio.arbook.kxywzp';
 // Shown in the language picker this session already: the home screen does not ask again right away
 const SHOWN_IN_PICKER_KEY = 'vv_install_shown_in_picker';
 
@@ -66,6 +68,16 @@ const InstallSteps: React.FC = () => {
   );
 };
 
+/** Google Play's coloured triangle (drawn, so it needs no download). */
+const PlayStoreIcon: React.FC = () => (
+  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" aria-hidden="true">
+    <path d="M3.6 1.8 13.5 12 3.6 22.2c-.4-.2-.6-.7-.6-1.2V3c0-.5.2-1 .6-1.2Z" fill="#34A853" />
+    <path d="m16.8 8.7-3.3 3.3L3.6 1.8c.3-.2.8-.2 1.2 0l12 6.9Z" fill="#FBBC04" />
+    <path d="m16.8 15.3-12 6.9c-.4.2-.9.2-1.2 0L13.5 12l3.3 3.3Z" fill="#EA4335" />
+    <path d="m20.3 10.7-3.5-2-3.3 3.3 3.3 3.3 3.5-2c.9-.5.9-2.1 0-2.6Z" fill="#4285F4" />
+  </svg>
+);
+
 /** Card content: title, then the browser's own install dialog when it offers one, else the steps. */
 const InstallCard: React.FC<{ onClose?: () => void; closeLabel?: string; onInstalled?: () => void }> = ({ onClose, closeLabel, onInstalled }) => {
   const { t } = useI18n();
@@ -96,6 +108,17 @@ const InstallCard: React.FC<{ onClose?: () => void; closeLabel?: string; onInsta
         </button>
       ) : (
         <InstallSteps />
+      )}
+      {android && (
+        <a
+          href={PLAY_STORE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 flex w-full items-center justify-center gap-2 rounded-full border-2 border-[#173A6B]/15 bg-white py-2 text-sm font-bold text-[#173A6B]"
+        >
+          <PlayStoreIcon />
+          {t('installPlay')}
+        </a>
       )}
       {onClose && (
         <button onClick={onClose} className="mt-3 w-full rounded-full bg-[#EEF8FB] py-2 text-sm font-semibold text-[#173A6B]">
