@@ -24,7 +24,7 @@ Hasil build masuk ke `app/src/main/assets/www`, lalu build APK/AAB di Android St
 
 **Konten bawaan APK (hybrid):** build **release** Android (AAB untuk Play Store, juga dari AI Studio)
 otomatis mengunduh halaman-halaman awal konten yang sudah dipublikasikan (model, gerakan, suara 3 bahasa)
-dari server konten (Cloudflare R2), **maksimal 30 MB** (ringan untuk diinstal; batas Play Store ±200 MB), mulai halaman 1; stiker yang tidak muat
+dari server konten (Cloudflare R2), **maksimal 120 MB** (batas Play Store ±200 MB), mulai halaman 1; stiker yang tidak muat
 dilewati. Halaman itu langsung bisa dipakai **tanpa internet** sejak instal. Sisanya diunduh aplikasi di
 latar belakang saat online, dan konten yang diperbarui lewat **Publikasikan** otomatis mengganti salinan di
 APK (hanya file yang berubah). Log build menampilkan baris `[konten] …` berisi halaman yang ikut.
