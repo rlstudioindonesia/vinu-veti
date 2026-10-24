@@ -1,15 +1,26 @@
 {
+  "id": "/",
   "name": "Vinu & Veti – Buku 3D Ajaib",
   "short_name": "Vinu & Veti",
-  "description": "Buku cerita 3D: arahkan kamera ke stiker QR dan karakter muncul di atas buku.",
+  "description": "Buku cerita 3D: arahkan kamera ke stiker QR dan karakter muncul di atas buku. Tanpa iklan, tanpa akun.",
+  "lang": "id",
+  "dir": "ltr",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#CFEFFB",
   "theme_color": "#CFEFFB",
+  "categories": ["education", "kids", "books"],
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
-  ]
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [
+    { "src": "screenshots/pilih-bahasa.webp", "sizes": "824x1830", "type": "image/webp", "form_factor": "narrow", "label": "Pilih bahasa: Indonesia, English, Filipino" },
+    { "src": "screenshots/beranda.webp", "sizes": "824x1320", "type": "image/webp", "form_factor": "narrow", "label": "Buka kamera ajaib dan pindai stiker di buku" }
+  ],
+  "related_applications": [{ "platform": "play", "url": "https://play.google.com/store/apps/details?id=com.aistudio.arbook.kxywzp", "id": "com.aistudio.arbook.kxywzp" }],
+  "prefer_related_applications": false
 }

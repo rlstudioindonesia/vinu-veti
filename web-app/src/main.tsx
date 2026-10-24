@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import { I18nProvider } from './i18n';
 import { ErrorBoundary, reloadOnce } from './components/Common/ErrorBoundary';
+import { captureInstallPrompt } from './utils/installPrompt';
 import '@fontsource/fredoka/latin-400.css';
 import '@fontsource/fredoka/latin-600.css';
 import '@fontsource/fredoka/latin-700.css';
@@ -24,6 +25,9 @@ if ('serviceWorker' in navigator) {
     });
   }
 }
+
+// Android / desktop browsers: keep the "can be installed" event for our Install button
+captureInstallPrompt();
 
 // A build file that no longer exists (a newer version was published while the page was open): reload
 window.addEventListener('vite:preloadError', (event) => {

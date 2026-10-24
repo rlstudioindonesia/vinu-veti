@@ -14,6 +14,20 @@ export function isStandalone(): boolean {
   );
 }
 
+/** An Android phone or tablet (the browser; the Play Store app is isAndroidApp). */
+export function isAndroid(): boolean {
+  return /Android/i.test(navigator.userAgent);
+}
+
+/**
+ * A browser inside another app on Android (Facebook, Instagram, a plain WebView…): it cannot install
+ * web apps, the link has to be opened in Chrome first.
+ */
+export function isAndroidInAppBrowser(): boolean {
+  const ua = navigator.userAgent;
+  return isAndroid() && (/; wv\)/.test(ua) || /FBAN|FBAV|FB_IAB|Instagram|Line\/|MicroMessenger/.test(ua));
+}
+
 export function isAndroidApp(): boolean {
   return !!(window as unknown as { AndroidBridge?: unknown }).AndroidBridge;
 }

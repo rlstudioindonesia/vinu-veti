@@ -8,3 +8,16 @@
   Cache-Control: no-cache
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+/manifest.webmanifest
+  Cache-Control: no-cache
+  Content-Type: application/manifest+json
+
+# Security headers (browsers and Google Safe Browsing look for a careful site): no guessing of file
+# types, no embedding of the app on other sites, only the camera may be used (for scanning), never
+# the microphone, location or payments.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(), geolocation=(), payment=(), usb=(), bluetooth=()
+  Cross-Origin-Opener-Policy: same-origin

@@ -1,4 +1,4 @@
-# Versi iPhone / iPad (gratis, tanpa App Store)
+# Versi iPhone / iPad / Android web (gratis, tanpa App Store)
 
 iPhone tidak bisa memasang file aplikasi secara manual seperti APK. Karena itu versi iPhone dibuat
 sebagai **Web App (PWA)**: dibuka dari link di Safari lalu "Tambahkan ke Layar Utama". Hasilnya ikon di
@@ -33,6 +33,20 @@ diambil dari Cloudflare R2 (alamat `/cdn/` di situs yang sama) seperti di Androi
 4. Saat membuka kamera pertama kali, izinkan **Kamera** dan **Gerakan & Orientasi** (agar karakter stabil).
 
 Di iPhone, aplikasi menampilkan petunjuk ini otomatis saat dibuka dari Safari.
+
+## Cara pakai di HP Android (tanpa Play Store)
+
+1. Buka link di **Chrome** (bukan browser di dalam Facebook/Instagram; dari WhatsApp boleh).
+2. Di layar Pilih Bahasa ketuk **Pasang di HP Android** → **Pasang sekarang** (dialog pemasangan Chrome),
+   atau menu **⋮ → Instal aplikasi / Tambahkan ke layar utama**.
+3. Aplikasi dipasang oleh Chrome sendiri (WebAPK yang dibuat dan ditandatangani Google): tanpa "sumber
+   tidak dikenal", tanpa peringatan Play Protect, ikon di layar utama, layar penuh, bisa offline.
+
+Yang membuat situs ini dinilai aman oleh Chrome/Google: HTTPS, manifest lengkap (ikon biasa + maskable,
+tangkapan layar, `id`), service worker, header keamanan (`web-app/public/_headers`: hanya kamera yang
+diizinkan, tidak bisa disematkan di situs lain), kebijakan privasi, tanpa iklan, tanpa izin lain, kamera
+baru diminta saat anak mengetuk Buka Kamera. Manifest menyebut aplikasi Play Store (`related_applications`)
+tanpa memaksanya, jadi pengguna bebas memilih.
 
 ## Catatan
 
