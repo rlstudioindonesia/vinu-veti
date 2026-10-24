@@ -106,7 +106,7 @@
 
       <h2>5. Internet dan konten yang diunduh</h2>
       <ul>
-        <li>Aplikasi mengunduh konten buku (model 3D dan file suara) dari server konten kami (layanan penyimpanan Supabase) lalu menyimpannya di perangkat agar bisa dipakai tanpa internet. Versi web untuk iPhone/iPad di-hosting di Cloudflare.</li>
+        <li>Aplikasi mengunduh konten buku (model 3D dan file suara) dari server konten kami (layanan penyimpanan Cloudflare R2) lalu menyimpannya di perangkat agar bisa dipakai tanpa internet. Versi web untuk iPhone/iPad di-hosting di Cloudflare.</li>
         <li>Saat mengunduh, penyedia layanan tersebut menerima data teknis yang memang diperlukan untuk mengirim file melalui internet (misalnya alamat IP dan jenis perangkat/browser). Kami tidak memakai data ini untuk mengenali, melacak, atau membuat profil pengguna. Pengiriman data menggunakan koneksi terenkripsi (HTTPS).</li>
         <li>Tidak ada data pengguna yang diunggah dari perangkat anak.</li>
       </ul>
@@ -120,7 +120,7 @@
       <h2>7. Menu pengelola konten</h2>
       <p>
         Aplikasi memiliki menu tersembunyi untuk guru/pengelola konten yang mengunggah materi buku. Menu ini dilindungi
-        login akun pengelola (email dan kata sandi melalui Supabase) dan tidak ditujukan untuk anak. Data login hanya
+        login akun pengelola (email dan kata sandi melalui server kami di Cloudflare) dan tidak ditujukan untuk anak. Data login hanya
         dipakai untuk mempublikasikan konten dan sesi login disimpan di perangkat pengelola tersebut.
       </p>
 
@@ -191,7 +191,7 @@
 
       <h2>5. Internet and downloaded content</h2>
       <ul>
-        <li>The app downloads the book content (3D models and voice files) from our content server (Supabase storage) and keeps it on the device so it works offline. The web version for iPhone/iPad is hosted on Cloudflare.</li>
+        <li>The app downloads the book content (3D models and voice files) from our content server (Cloudflare R2 storage) and keeps it on the device so it works offline. The web version for iPhone/iPad is hosted on Cloudflare.</li>
         <li>When downloading, these providers receive the technical data needed to deliver files over the internet (such as the IP address and device/browser type). We do not use this data to identify, track or profile users. Transfers use encrypted connections (HTTPS).</li>
         <li>No user data is uploaded from a child's device.</li>
       </ul>
@@ -205,7 +205,7 @@
       <h2>7. Content manager area</h2>
       <p>
         The app has a hidden area for teachers/content managers who upload the book content. It is protected by a
-        content manager login (email and password via Supabase) and is not intended for children. Login data is only
+        content manager login (email and password via our server on Cloudflare) and is not intended for children. Login data is only
         used to publish content, and the login session is stored on that manager's device.
       </p>
 
@@ -278,7 +278,7 @@
 
       <h2>5. Internet at mga dina-download na nilalaman</h2>
       <ul>
-        <li>Dina-download ng app ang nilalaman ng aklat (3D models at mga file ng boses) mula sa aming content server (Supabase storage) at iniimbak ito sa device para gumana kahit offline. Ang web na bersyon para sa iPhone/iPad ay naka-host sa Cloudflare.</li>
+        <li>Dina-download ng app ang nilalaman ng aklat (3D models at mga file ng boses) mula sa aming content server (Cloudflare R2 storage) at iniimbak ito sa device para gumana kahit offline. Ang web na bersyon para sa iPhone/iPad ay naka-host sa Cloudflare.</li>
         <li>Habang nagda-download, natatanggap ng mga provider na ito ang teknikal na datos na kailangan para maihatid ang mga file sa internet (gaya ng IP address at uri ng device/browser). Hindi namin ginagamit ang datos na ito para kilalanin, subaybayan o i-profile ang mga user. Gumagamit ng naka-encrypt na koneksyon (HTTPS) ang paglilipat.</li>
         <li>Walang datos ng user na ina-upload mula sa device ng bata.</li>
       </ul>
@@ -292,7 +292,7 @@
       <h2>7. Lugar para sa tagapamahala ng nilalaman</h2>
       <p>
         May nakatagong bahagi ang app para sa mga guro/tagapamahala ng nilalaman na nag-a-upload ng nilalaman ng aklat.
-        Protektado ito ng login ng tagapamahala (email at password sa pamamagitan ng Supabase) at hindi ito para sa mga
+        Protektado ito ng login ng tagapamahala (email at password sa pamamagitan ng aming server sa Cloudflare) at hindi ito para sa mga
         bata. Ginagamit lamang ang datos ng login para mag-publish ng nilalaman, at ang login session ay iniimbak sa
         device ng tagapamahalang iyon.
       </p>

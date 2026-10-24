@@ -1,4 +1,7 @@
-# Publikasi Online dengan Supabase
+# Publikasi Online dengan Supabase (lama)
+
+> **Tidak dipakai lagi sejak versi 16**: konten pindah ke Cloudflare R2, lihat [`R2.md`](R2.md).
+> Kuota unduhan gratis Supabase (5 GB/bulan) habis. Berkas ini disimpan untuk aplikasi versi lama.
 
 Alur: admin mengunggah stiker & model dari aplikasi admin → tersimpan di Supabase Storage →
 aplikasi Play Store mengunduh **hanya file yang berubah** saat online → disimpan di HP → bisa dipakai offline.

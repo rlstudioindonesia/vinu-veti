@@ -10,9 +10,9 @@ interface AdminLoginModalProps {
 }
 
 /**
- * Admin login with the Supabase admin account (public sign-ups are disabled in Supabase, so only the
- * accounts created in the dashboard can get in). The same session is used to publish content.
- * Without Supabase configured (local development only) it falls back to admin / admin.
+ * Admin login with an account from the Worker secret ADMIN_USERS (worker/index.js, docs/R2.md): only
+ * those accounts can get in. The same session is used to publish content.
+ * Without VITE_CONTENT_API (local development only) it falls back to admin / admin.
  */
 export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onSuccess, onClose }) => {
   const [email, setEmail] = useState<string>('');
@@ -31,7 +31,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onSucc
         sessionStorage.setItem('ar_admin_auth', 'true');
         onSuccess();
       } else {
-        setError('Login salah. (Mode lokal tanpa Supabase: admin / admin)');
+        setError('Login salah. (Mode lokal tanpa server konten: admin / admin)');
       }
       return;
     }

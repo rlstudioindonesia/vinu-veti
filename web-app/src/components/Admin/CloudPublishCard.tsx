@@ -31,8 +31,8 @@ export const CloudPublishCard: React.FC<CloudPublishCardProps> = ({ targets, onP
     return (
       <div className="mt-6 p-4 rounded-2xl bg-slate-900/60 border border-amber-500/30 text-[11px] text-slate-300 leading-relaxed">
         <h4 className="text-xs font-bold text-amber-300 mb-1">Publikasi Online belum diatur</h4>
-        Isi <code className="text-emerald-300">VITE_SUPABASE_URL</code> dan <code className="text-emerald-300">VITE_SUPABASE_ANON_KEY</code> di
-        file <code>web-app/.env</code>, lalu build ulang. Panduan lengkap ada di <code>docs/SUPABASE.md</code>.
+        Isi <code className="text-emerald-300">VITE_CONTENT_API</code> di file <code>web-app/.env</code>, lalu build ulang.
+        Panduan lengkap ada di <code>docs/R2.md</code>.
       </div>
     );
   }

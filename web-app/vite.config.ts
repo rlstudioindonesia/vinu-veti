@@ -50,8 +50,9 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  // Only the app itself: content (Supabase) is mirrored by the app into IndexedDB
-  if (url.origin !== self.location.origin) return;
+  // Only the app itself: content (R2 via /cdn/, old Supabase) is mirrored by the app into IndexedDB,
+  // and admin requests (/api/) must reach the Worker
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/cdn/') || url.pathname.startsWith('/api/')) return;
   // Page: network first (gets updates), offline from the cache
   if (req.mode === 'navigate') {
     event.respondWith(

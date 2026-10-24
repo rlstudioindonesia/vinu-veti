@@ -43,7 +43,7 @@ const PERIODIC_UPDATE_CHECK_MS = 2 * 60 * 1000;
 const ADMIN_UPDATE_CHECK_MS = 2000;
 
 // Admin tools are in every build. In the Play Store build the entry is hidden (tap the "VINU & VETI"
-// badge 7 times) and protected by the Supabase admin account. `npm run dev` and `npm run build:admin`
+// badge 7 times) and protected by the admin account (worker/index.js). `npm run dev` and `npm run build:admin`
 // also show a visible "Guru & Ortu" button.
 const SHOW_ADMIN_BUTTON = import.meta.env.DEV || import.meta.env.VITE_ENABLE_ADMIN === 'true';
 
