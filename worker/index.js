@@ -4,7 +4,8 @@
  * costs, unlike the Supabase free plan whose download quota ran out):
  *
  *   GET/HEAD /cdn/<path>          public: manifest.json and files/<sha256>.<ext>[.partN] (Range works)
- *   POST     /api/login           admin email + password (secret ADMIN_USERS) -> token for 30 days
+ *   POST     /api/login           admin name (email or e.g. "admin") + password (secret ADMIN_USERS)
+ *                                 -> token for 30 days
  *   PUT      /api/files/<path>    admin: store one file
  *   GET      /api/list?prefix=    admin: names of the stored files
  *   POST     /api/delete          admin: { keys: [...] } removes files no longer used
@@ -146,7 +147,13 @@ function sameText(a, b) {
 
 async function login(request, env) {
   const users = adminUsers(env);
-  if (users.length === 0) return json({ error: 'Akun admin belum diatur di Cloudflare (secret ADMIN_USERS).' }, 503);
+  if (users.length === 0) {
+    // Set but unreadable (usually the colon between name and password is missing)
+    const hint = String(env.ADMIN_USERS || '').trim()
+      ? 'Isi secret ADMIN_USERS di Cloudflare belum benar: harus nama:password, misalnya admin:SandiAnda123.'
+      : 'Akun admin belum diatur di Cloudflare (secret ADMIN_USERS di Settings → Variables and Secrets).';
+    return json({ error: hint }, 503);
+  }
   const body = await request.json().catch(() => ({}));
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
@@ -155,7 +162,7 @@ async function login(request, env) {
   const ok = sameText(password, user ? user.password : `x${password}`) && !!user;
   if (!ok) {
     await new Promise((r) => setTimeout(r, 800));
-    return json({ error: 'Email atau password salah.' }, 401);
+    return json({ error: 'Nama pengguna atau password salah.' }, 401);
   }
   const expires = Math.floor(Date.now() / 1000) + TOKEN_DAYS * 86400;
   const payload = b64url(enc.encode(JSON.stringify({ email, exp: expires })));

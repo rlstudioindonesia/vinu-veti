@@ -107,11 +107,13 @@ export const CloudPublishCard: React.FC<CloudPublishCardProps> = ({ targets, onP
       {!user ? (
         <form onSubmit={handleLogin} className="space-y-2">
           <input
-            type="email"
+            type="text"
+            autoCapitalize="none"
+            spellCheck={false}
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email akun publikasi"
+            placeholder="Email / nama pengguna admin"
             className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
           />
           <input
