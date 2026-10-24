@@ -15,6 +15,8 @@
  * files again). Setup: docs/R2.md.
  */
 
+import { BUILD_ADMIN_USERS } from './admin-config.js';
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, HEAD, PUT, POST, OPTIONS',
@@ -114,18 +116,21 @@ async function serveContent(request, env, key) {
 
 // ---- Admin login: signed token (HMAC-SHA256), no database needed ----
 
+/** Accounts from the Worker secret, otherwise from the build variable (see admin-config.js). */
+const accountsText = (env) => String(env.ADMIN_USERS || BUILD_ADMIN_USERS || '');
+
 const enc = new TextEncoder();
 const b64url = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 async function hmac(env, text) {
   // The key is derived from the accounts: changing a password signs every admin out
-  const key = await crypto.subtle.importKey('raw', enc.encode(`vv-admin:${env.ADMIN_USERS}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const key = await crypto.subtle.importKey('raw', enc.encode(`vv-admin:${accountsText(env)}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return b64url(await crypto.subtle.sign('HMAC', key, enc.encode(text)));
 }
 
-/** ADMIN_USERS: "email:password" pairs separated by commas or new lines. */
+/** ADMIN_USERS: "name:password" pairs separated by commas or new lines. */
 function adminUsers(env) {
-  return String(env.ADMIN_USERS || '')
+  return accountsText(env)
     .split(/[\n,]+/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -149,7 +154,7 @@ async function login(request, env) {
   const users = adminUsers(env);
   if (users.length === 0) {
     // Set but unreadable (usually the colon between name and password is missing)
-    const hint = String(env.ADMIN_USERS || '').trim()
+    const hint = accountsText(env).trim()
       ? 'Isi secret ADMIN_USERS di Cloudflare belum benar: harus nama:password, misalnya admin:SandiAnda123.'
       : 'Akun admin belum diatur di Cloudflare (secret ADMIN_USERS di Settings → Variables and Secrets).';
     return json({ error: hint }, 503);
