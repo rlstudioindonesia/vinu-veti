@@ -46,7 +46,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onSucc
         err instanceof TypeError
           ? 'Tidak ada koneksi internet. Login admin butuh internet.'
           : err instanceof Error && /invalid/i.test(err.message)
-            ? 'Email atau password salah.'
+            ? 'Nama pengguna atau password salah.'
             : err instanceof Error
               ? err.message
               : 'Login gagal'
@@ -83,17 +83,20 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({ isOpen, onSucc
 
         <form onSubmit={handleLogin} className="space-y-3.5">
           <div>
-            <label className="text-[11px] text-slate-400 block mb-1">Email admin</label>
+            <label className="text-[11px] text-slate-400 block mb-1">Email / nama pengguna admin</label>
             <div className="relative">
               <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
-                type={CLOUD_PUBLISH_ENABLED ? 'email' : 'text'}
+                // Any name from ADMIN_USERS works (an email address or e.g. "admin")
+                type="text"
+                autoCapitalize="none"
+                spellCheck={false}
                 autoFocus
                 required
                 autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder={CLOUD_PUBLISH_ENABLED ? 'nama@email.com' : 'admin'}
+                placeholder="admin atau nama@email.com"
                 className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-white focus:outline-hidden focus:border-emerald-500"
               />
             </div>
