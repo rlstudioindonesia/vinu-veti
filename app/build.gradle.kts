@@ -152,7 +152,7 @@ dependencies {
 
 // ---------------------------------------------------------------------------------------------
 // Content inside the APK (hybrid): the first pages of the published content, up to 30 MB, are
-// downloaded from Supabase while the app is built, so they work offline straight after install. The
+// downloaded from the content server (R2 via the Worker, VITE_CONTENT_API) while the app is built, so they work offline straight after install. The
 // app downloads the rest in the background and replaces changed files (SHA-256) by itself.
 // Runs in every build environment (AI Studio, Android Studio), no `npm run build` needed. Same rules
 // as web-app/scripts/bundle-content.mjs; content prepared by that script (in src/main/assets) wins.
@@ -180,7 +180,7 @@ abstract class BundleContentTask : DefaultTask() {
     }
     val base = baseUrl.get()
     if (base.isBlank()) {
-      logger.warn("[konten] VITE_SUPABASE_URL belum diisi: APK tanpa konten bawaan.")
+      logger.warn("[konten] VITE_CONTENT_API belum diisi: APK tanpa konten bawaan.")
       return
     }
     try {
@@ -313,7 +313,7 @@ abstract class BundleContentTask : DefaultTask() {
   }
 }
 
-// Settings of the web app (web-app/.env, web-app/.env.local), e.g. the Supabase address
+// Settings of the web app (web-app/.env, web-app/.env.local), e.g. the content server address
 val webEnv: Map<String, String> = buildMap {
   for (name in listOf(".env", ".env.local")) {
     val f = rootProject.file("web-app/$name")
@@ -328,12 +328,11 @@ val webEnv: Map<String, String> = buildMap {
 
 val bundleContent = tasks.register<BundleContentTask>("bundleContent") {
   val custom = webEnv["VITE_CONTENT_URL"].orEmpty().trim()
-  val supabase = webEnv["VITE_SUPABASE_URL"].orEmpty().trim().trimEnd('/')
-  val bucket = webEnv["VITE_SUPABASE_BUCKET"].orEmpty().trim().ifEmpty { "vinu-veti" }
+  val api = webEnv["VITE_CONTENT_API"].orEmpty().trim().trimEnd('/')
   baseUrl.set(
     when {
       custom.isNotEmpty() -> custom.trimEnd('/') + "/"
-      supabase.isNotEmpty() -> "$supabase/storage/v1/object/public/$bucket/"
+      api.isNotEmpty() -> "$api/cdn/"
       else -> ""
     }
   )

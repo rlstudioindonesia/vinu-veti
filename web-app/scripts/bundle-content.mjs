@@ -1,5 +1,5 @@
 /**
- * Copies the first pages of the published online content (Supabase) into public/content before every
+ * Copies the first pages of the published online content (R2 via the Worker) into public/content before every
  * build (hybrid): those stickers work offline straight after install / update, the rest is downloaded
  * by the app in the background, as before. Google Play limits the app itself to about 200 MB, so only
  * up to CONTENT_BUNDLE_MB (default 30 MB: light to install, the first pages work offline) is taken, page by page from page 1; a sticker that does not
@@ -34,13 +34,8 @@ function readEnv() {
 
 const env = readEnv();
 const custom = (env.VITE_CONTENT_URL || '').trim();
-const supabase = (env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
-const bucket = (env.VITE_SUPABASE_BUCKET || 'vinu-veti').trim();
-const base = custom
-  ? custom.replace(/\/?$/, '/')
-  : supabase
-    ? `${supabase}/storage/v1/object/public/${bucket}/`
-    : '';
+const api = (env.VITE_CONTENT_API || '').trim().replace(/\/+$/, '');
+const base = custom ? custom.replace(/\/?$/, '/') : api ? `${api}/cdn/` : '';
 
 // About 200 MB is the Play Store limit for the app itself; the rest of the app is small
 const BUDGET = Math.max(0, Number(env.CONTENT_BUNDLE_MB ?? 30)) * 1024 * 1024;
@@ -67,7 +62,7 @@ async function fetchFile(rel, size) {
 
 async function main() {
   if (!base) {
-    console.log('[konten] VITE_SUPABASE_URL belum diisi — melewati penggabungan konten ke APK.');
+    console.log('[konten] VITE_CONTENT_API belum diisi — melewati penggabungan konten ke APK.');
     return;
   }
   console.log(`[konten] Mengambil konten terbaru dari ${base}`);

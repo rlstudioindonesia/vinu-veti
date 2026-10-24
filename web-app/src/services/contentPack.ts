@@ -3,7 +3,7 @@
  *
  *  - Bundled pack: `public/content/` (manifest.json + files) is built into the APK, so the content
  *    works offline right after install.
- *  - Online pack: the admin publishes to Supabase Storage (see cloudPublish.ts). Whenever the app is
+ *  - Online pack: the admin publishes to Cloudflare R2 via the app's Worker (see cloudPublish.ts). Whenever the app is
  *    online it reads the small `manifest.json`, then downloads only the files whose SHA-256 changed and
  *    mirrors them into local storage, so everything keeps working offline afterwards.
  *
@@ -13,7 +13,7 @@
 import type { Zippable } from 'fflate';
 import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
 import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, pictureKey, resolveAudioSource, resolveModelSource, resolvePictureSource, voiceOf } from './db';
-import { CHUNK_SIZE, partCount, REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
+import { CHUNK_SIZE, currentContentUrl, partCount, REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
 
 export interface PackFile {
   file: string; // path relative to the manifest
@@ -218,7 +218,7 @@ const received = new Map<string, { done: number; total: number }>();
 
 /** Progress (0-1) of the download of `url`, or null when it is not being downloaded. */
 export function downloadProgress(url: string | undefined): number | null {
-  const r = url ? received.get(url) : undefined;
+  const r = url ? received.get(currentContentUrl(url)) : undefined;
   return r && r.total > 0 ? Math.min(1, r.done / r.total) : null;
 }
 
@@ -294,7 +294,8 @@ async function downloadNow(url: string, size?: number): Promise<ArrayBuffer> {
 // background sync share it instead of fetching the same file twice
 const inFlight = new Map<string, Promise<ArrayBuffer>>();
 
-async function download(url: string, size?: number): Promise<ArrayBuffer> {
+async function download(saved: string, size?: number): Promise<ArrayBuffer> {
+  const url = currentContentUrl(saved);
   let job = inFlight.get(url);
   if (!job) {
     job = downloadNow(url, size).finally(() => inFlight.delete(url));

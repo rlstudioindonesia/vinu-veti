@@ -7,8 +7,8 @@ Aplikasi Android (WebView + React) yang menampilkan model 3D di atas stiker QR p
 Menu admin ada di semua versi, tetapi tersembunyi:
 
 1. Di homepage, **ketuk badge "VINU & VETI" (kiri atas) 7 kali dengan cepat**.
-2. Login dengan akun admin Supabase (email + password). Pendaftaran umum dimatikan, jadi hanya akun
-   yang dibuat di dashboard Supabase yang bisa masuk.
+2. Login dengan akun admin (email + password) dari secret `ADMIN_USERS` di Cloudflare
+   (lihat [`docs/R2.md`](docs/R2.md)). Hanya akun di situ yang bisa masuk.
 3. Tambah/ubah stiker, unggah `.glb`, lalu **Publikasikan**. Login tersimpan di HP itu; keluar lewat
    tombol **Keluar** di kartu Publikasi Online.
 
@@ -24,7 +24,7 @@ Hasil build masuk ke `app/src/main/assets/www`, lalu build APK/AAB di Android St
 
 **Konten bawaan APK (hybrid):** build **release** Android (AAB untuk Play Store, juga dari AI Studio)
 otomatis mengunduh halaman-halaman awal konten yang sudah dipublikasikan (model, gerakan, suara 3 bahasa)
-dari Supabase, **maksimal 30 MB** (ringan untuk diinstal; batas Play Store ±200 MB), mulai halaman 1; stiker yang tidak muat
+dari server konten (Cloudflare R2), **maksimal 30 MB** (ringan untuk diinstal; batas Play Store ±200 MB), mulai halaman 1; stiker yang tidak muat
 dilewati. Halaman itu langsung bisa dipakai **tanpa internet** sejak instal. Sisanya diunduh aplikasi di
 latar belakang saat online, dan konten yang diperbarui lewat **Publikasikan** otomatis mengganti salinan di
 APK (hanya file yang berubah). Log build menampilkan baris `[konten] …` berisi halaman yang ikut.
@@ -49,9 +49,10 @@ screenshot-nya bila ada masalah.
 
 ## Konten online (disarankan)
 
-Admin mempublikasikan stiker & model ke Supabase; aplikasi Play Store mengunduh hanya file yang berubah
+Admin mempublikasikan stiker & model ke Cloudflare R2 (lewat Worker `worker/index.js`, unduhan tanpa
+biaya); aplikasi Play Store mengunduh hanya file yang berubah
 dan menyimpannya untuk offline. Update konten **tanpa rilis ulang** Play Store.
-Setup sekali: lihat [`docs/SUPABASE.md`](docs/SUPABASE.md).
+Setup sekali: lihat [`docs/R2.md`](docs/R2.md) (sebelumnya Supabase: `docs/SUPABASE.md`).
 
 ## Update aplikasi
 

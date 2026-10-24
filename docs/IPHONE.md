@@ -20,7 +20,7 @@ Mac, tanpa biaya. Link yang sama juga bisa dibuka di HP Android.
    (bisa dilihat di tab **Domains**).
 
 Setiap ada merge ke `main`, Cloudflare otomatis membangun dan meng-update situs. Konten QR/model 3D
-tetap diambil dari Supabase seperti di Android (tidak perlu upload ulang).
+diambil dari Cloudflare R2 (alamat `/cdn/` di situs yang sama) seperti di Android (tidak perlu upload ulang).
 
 (Netlify juga bisa: base directory `web-app`, build `npm run build:web`, publish `web-app/dist`.)
 

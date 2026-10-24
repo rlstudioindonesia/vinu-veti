@@ -96,7 +96,7 @@ const DeletePasswordField: React.FC<{ value: string; error: string | null; onCha
 
 // Deleting a sticker, an animation or a voice asks for the delete password. Only its SHA-256 is in
 // the app; it is a guard against deleting by accident, not a security boundary (that is the
-// Supabase login for publishing).
+// admin login for publishing).
 const DELETE_PASSWORD_SHA256 = '4176a9032c2792c09bf2964cc5012878bba2293bdef7d3fb4c2c0f93742f2768';
 
 async function checkDeletePassword(pw: string): Promise<boolean> {
