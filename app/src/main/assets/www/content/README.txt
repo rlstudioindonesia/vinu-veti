@@ -1,4 +1,4 @@
-Konten bawaan APK (hybrid): halaman-halaman awal, maksimal 30 MB, bisa dipakai offline sejak instal.
+Konten bawaan APK (hybrid): halaman-halaman awal, maksimal 120 MB, bisa dipakai offline sejak instal.
 Sisanya diunduh aplikasi di latar belakang saat online, dan konten yang diperbarui lewat Publikasikan
 otomatis mengganti salinan di APK (dibandingkan per file dengan SHA-256).
 
