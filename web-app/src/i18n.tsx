@@ -50,6 +50,11 @@ const STRINGS = {
   installButtonAndroid: { id: 'Pasang di HP Android', en: 'Install on Android', tl: 'I-install sa Android' },
   installButtonApp: { id: 'Pasang aplikasi', en: 'Install the app', tl: 'I-install ang app' },
   installTitleAndroid: { id: 'Pasang di HP Android', en: 'Install on Android', tl: 'I-install sa Android' },
+  installPlay: {
+    id: 'Atau pasang dari Google Play',
+    en: 'Or install from Google Play',
+    tl: 'O i-install mula sa Google Play',
+  },
   installNow: { id: 'Pasang sekarang', en: 'Install now', tl: 'I-install ngayon' },
   installAndroidIntro: {
     id: 'Gratis dan aman: dipasang langsung oleh Chrome, muncul sebagai ikon di layar utama dan bisa dipakai offline.',
