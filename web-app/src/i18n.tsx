@@ -47,6 +47,30 @@ const STRINGS = {
   },
   installLater: { id: 'Nanti saja', en: 'Later', tl: 'Mamaya na' },
   installButton: { id: 'Pasang di iPhone', en: 'Install on iPhone', tl: 'I-install sa iPhone' },
+  installButtonAndroid: { id: 'Pasang di HP Android', en: 'Install on Android', tl: 'I-install sa Android' },
+  installButtonApp: { id: 'Pasang aplikasi', en: 'Install the app', tl: 'I-install ang app' },
+  installTitleAndroid: { id: 'Pasang di HP Android', en: 'Install on Android', tl: 'I-install sa Android' },
+  installNow: { id: 'Pasang sekarang', en: 'Install now', tl: 'I-install ngayon' },
+  installAndroidIntro: {
+    id: 'Gratis dan aman: dipasang langsung oleh Chrome, muncul sebagai ikon di layar utama dan bisa dipakai offline.',
+    en: 'Free and safe: installed by Chrome itself, it appears as an icon on the home screen and works offline.',
+    tl: 'Libre at ligtas: ini-install mismo ng Chrome, lalabas bilang icon sa home screen at gumagana offline.',
+  },
+  installAndroidStep1: {
+    id: 'Ketuk menu ⋮ di kanan atas Chrome',
+    en: 'Tap the ⋮ menu at the top right of Chrome',
+    tl: 'I-tap ang ⋮ menu sa kanang itaas ng Chrome',
+  },
+  installAndroidStep2: {
+    id: 'Pilih "Instal aplikasi" atau "Tambahkan ke layar utama"',
+    en: 'Choose "Install app" or "Add to Home screen"',
+    tl: 'Piliin ang "Install app" o "Add to Home screen"',
+  },
+  installChrome: {
+    id: 'Buka link ini di Chrome untuk memasangnya (ketuk ⋮ lalu "Buka di Chrome").',
+    en: 'Open this link in Chrome to install it (tap ⋮, then "Open in Chrome").',
+    tl: 'Buksan ang link na ito sa Chrome para i-install (i-tap ang ⋮, tapos "Open in Chrome").',
+  },
   installClose: { id: 'Tutup', en: 'Close', tl: 'Isara' },
   noContentAdmin: {
     id: 'Belum ada konten AR. Tambahkan stiker & model 3D di menu Guru & Ortu.',
