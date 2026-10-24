@@ -1,7 +1,7 @@
 import React from 'react';
 import { Lang, LANGS, useI18n } from '../../i18n';
 import { Cloud, Star, SKY_GRADIENT, MASCOT_SRC } from '../Common/Scenery';
-import { InstallButton } from './InstallHint';
+import { InstallPickerCard } from './InstallHint';
 import { Flag } from '../Common/Flag';
 
 interface LanguagePickerProps {
@@ -52,7 +52,7 @@ export const LanguagePicker: React.FC<LanguagePickerProps> = ({ onDone }) => {
           ))}
         </div>
 
-        <InstallButton />
+        <InstallPickerCard />
       </div>
     </div>
   );

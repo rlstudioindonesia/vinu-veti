@@ -1,10 +1,20 @@
 import React, { useState } from 'react';
 import { Share, PlusSquare, Smartphone, X, MoreVertical, Download } from 'lucide-react';
-import { useI18n } from '../../i18n';
+import { loadSavedLang, useI18n } from '../../i18n';
 import { isAndroid, isAndroidApp, isAndroidInAppBrowser, isIOS, isStandalone } from '../../utils/platform';
 import { promptInstall, useCanPromptInstall } from '../../utils/installPrompt';
 
 const DISMISS_KEY = 'vv_install_hint_dismissed';
+// Shown in the language picker this session already: the home screen does not ask again right away
+const SHOWN_IN_PICKER_KEY = 'vv_install_shown_in_picker';
+
+function shownInPicker(): boolean {
+  try {
+    return sessionStorage.getItem(SHOWN_IN_PICKER_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function dismissed(): boolean {
   try {
@@ -57,7 +67,7 @@ const InstallSteps: React.FC = () => {
 };
 
 /** Card content: title, then the browser's own install dialog when it offers one, else the steps. */
-const InstallCard: React.FC<{ onClose: () => void; closeLabel: string; onInstalled?: () => void }> = ({ onClose, closeLabel, onInstalled }) => {
+const InstallCard: React.FC<{ onClose?: () => void; closeLabel?: string; onInstalled?: () => void }> = ({ onClose, closeLabel, onInstalled }) => {
   const { t } = useI18n();
   const canPrompt = useCanPromptInstall();
   const android = isAndroid();
@@ -66,9 +76,11 @@ const InstallCard: React.FC<{ onClose: () => void; closeLabel: string; onInstall
   };
   return (
     <>
-      <button onClick={onClose} className="absolute right-3 top-3 rounded-full p-1 text-[#173A6B]/60" aria-label={closeLabel}>
-        <X className="h-4 w-4" />
-      </button>
+      {onClose && (
+        <button onClick={onClose} className="absolute right-3 top-3 rounded-full p-1 text-[#173A6B]/60" aria-label={closeLabel}>
+          <X className="h-4 w-4" />
+        </button>
+      )}
       <div className="mb-2 flex items-center gap-2 text-base font-bold">
         <img src="./icons/icon-192.png" alt="" className="h-8 w-8 rounded-lg" />
         {t(android ? 'installTitleAndroid' : canPrompt ? 'installButtonApp' : 'installTitle')}
@@ -85,9 +97,11 @@ const InstallCard: React.FC<{ onClose: () => void; closeLabel: string; onInstall
       ) : (
         <InstallSteps />
       )}
-      <button onClick={onClose} className="mt-3 w-full rounded-full bg-[#EEF8FB] py-2 text-sm font-semibold text-[#173A6B]">
-        {closeLabel}
-      </button>
+      {onClose && (
+        <button onClick={onClose} className="mt-3 w-full rounded-full bg-[#EEF8FB] py-2 text-sm font-semibold text-[#173A6B]">
+          {closeLabel}
+        </button>
+      )}
     </>
   );
 };
@@ -99,7 +113,8 @@ const InstallCard: React.FC<{ onClose: () => void; closeLabel: string; onInstall
  */
 export const InstallHint: React.FC = () => {
   const { t } = useI18n();
-  const [show, setShow] = useState(() => canSuggest() && !dismissed());
+  // Android first start: the language picker (shown first) already offers it
+  const [show, setShow] = useState(() => canSuggest() && !dismissed() && !shownInPicker() && !(isAndroid() && loadSavedLang() === null));
   if (!show) return null;
 
   const dismiss = () => {
@@ -117,6 +132,26 @@ export const InstallHint: React.FC = () => {
       style={{ bottom: 'calc(12px + env(safe-area-inset-bottom))' }}
     >
       <InstallCard onClose={dismiss} closeLabel={t('installLater')} onInstalled={dismiss} />
+    </div>
+  );
+};
+
+/**
+ * Android phone browser: the install card right in the language picker (the first screen), with the
+ * browser's "Install now" when Chrome offers it. Other devices get the small InstallButton there.
+ */
+export const InstallPickerCard: React.FC = () => {
+  const [installed, setInstalled] = useState(false);
+  if (installed) return null;
+  if (!isAndroid() || !canSuggest()) return <InstallButton />;
+  try {
+    sessionStorage.setItem(SHOWN_IN_PICKER_KEY, '1');
+  } catch {
+    // ignore
+  }
+  return (
+    <div className="relative w-full rounded-[24px] bg-white p-4 text-left text-[#173A6B] shadow-[0_5px_0_rgba(18,59,109,0.12)]">
+      <InstallCard onInstalled={() => setInstalled(true)} />
     </div>
   );
 };
