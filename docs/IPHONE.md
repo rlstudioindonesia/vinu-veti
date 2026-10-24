@@ -16,8 +16,8 @@ Mac, tanpa biaya. Link yang sama juga bisa dibuka di HP Android.
    - Build command: `npm run build:web`
    - Deploy command: `npx wrangler deploy`
    - Root directory: `/`
-4. **Deploy**. Setelah ±2 menit muncul alamat seperti `https://vinu-veti.<akun>.workers.dev`
-   (bisa dilihat di tab **Domains**).
+4. **Deploy**. Setelah ±2 menit muncul alamat seperti `https://vinu-veti.<akun>.workers.dev`; domain utama
+   aplikasi: **https://vinuveti.unisvet.ac.id** (tab **Domains**). Bagikan alamat domain utama ini ke orang tua.
 
 Setiap ada merge ke `main`, Cloudflare otomatis membangun dan meng-update situs. Konten QR/model 3D
 diambil dari Cloudflare R2 (alamat `/cdn/` di situs yang sama) seperti di Android (tidak perlu upload ulang).
