@@ -204,8 +204,35 @@ export function pictureKey(id: string): string {
 }
 
 /** File id used for the native (app-private) copy of a voice. */
-function nativeAudioId(id: string, lang: VoiceLang): string {
+export function nativeAudioId(id: string, lang: VoiceLang): string {
   return lang === 'id' ? id : `${id}_${lang}`;
+}
+
+/**
+ * Voices are stored per "owner": the sticker id (main voice), secondVoiceOwner(id) (the main
+ * animation's 2nd voice) and each extra animation's asset id (its own voice). Storage keys are
+ * audioKey(owner, lang), exactly like the main voice always was, so existing voices stay untouched.
+ */
+export function secondVoiceOwner(targetId: string): string {
+  return `${targetId}_v2`;
+}
+
+/** Every voice owner of a sticker (main, 2nd voice, extra animations). */
+export function voiceOwners(target: ARQRTarget): string[] {
+  return [target.id, secondVoiceOwner(target.id), ...(target.assets || []).map((a) => a.id)];
+}
+
+/** The voices of one owner (see voiceOwners). */
+export function voicesOfOwner(target: ARQRTarget, owner: string): Partial<Record<VoiceLang, VoiceFile>> | undefined {
+  if (owner === target.id) return target.voices;
+  if (owner === secondVoiceOwner(target.id)) return target.voices2;
+  return target.assets?.find((a) => a.id === owner)?.voices;
+}
+
+/** One owner's voice in a language (the main voice includes the legacy single voice). */
+export function ownerVoiceOf(target: ARQRTarget, owner: string, lang: VoiceLang): VoiceFile | null {
+  if (owner === target.id) return voiceOf(target, lang);
+  return voicesOfOwner(target, owner)?.[lang] || null;
 }
 
 /** The sticker's voice for a language (legacy single voice = Indonesian). */
@@ -249,9 +276,11 @@ export const ARDatabase = {
 
   async deleteTarget(target: ARQRTarget): Promise<void> {
     const ids = [target.id, pictureKey(target.id), ...(target.assets || []).map((a) => a.id)];
+    // Every voice: main, 2nd voice, extra animations' own voices, all languages
+    const owners = voiceOwners(target);
     await nativeQueue;
     try {
-      [...ids, ...VOICE_LANGS.map((l) => nativeAudioId(target.id, l))].forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
+      [...ids, ...owners.flatMap((o) => VOICE_LANGS.map((l) => nativeAudioId(o, l)))].forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
     } catch {
       // ignore
     }
@@ -259,7 +288,7 @@ export const ARDatabase = {
     await new Promise<void>((resolve) => {
       const tx = db.transaction([STORE_TARGETS, STORE_ASSETS], 'readwrite');
       tx.objectStore(STORE_TARGETS).delete(target.id);
-      deleteKeys(tx.objectStore(STORE_ASSETS), [...ids, ...VOICE_LANGS.map((l) => audioKey(target.id, l))]);
+      deleteKeys(tx.objectStore(STORE_ASSETS), [...ids, ...owners.flatMap((o) => VOICE_LANGS.map((l) => audioKey(o, l)))]);
       tx.oncomplete = () => resolve();
       tx.onerror = () => resolve();
     });
@@ -269,7 +298,8 @@ export const ARDatabase = {
   async deleteStoredFiles(ids: string[]): Promise<void> {
     await nativeQueue;
     try {
-      ids.forEach((id) => getAndroidBridge()?.deleteTargetFiles?.(id));
+      // (an extra animation's id also owns its voices: their English / Filipino copies go too)
+      ids.forEach((id) => VOICE_LANGS.forEach((l) => getAndroidBridge()?.deleteTargetFiles?.(nativeAudioId(id, l))));
     } catch {
       // ignore
     }
@@ -375,12 +405,12 @@ export async function resolvePictureSource(target: ARQRTarget): Promise<FileData
 }
 
 /** Best available source of the sticker's voice in a language (null when there is none). */
-export async function resolveAudioSource(target: ARQRTarget, lang: VoiceLang = 'id'): Promise<FileData | string | null> {
-  const voice = voiceOf(target, lang);
+export async function resolveAudioSource(target: ARQRTarget, lang: VoiceLang = 'id', owner: string = target.id): Promise<FileData | string | null> {
+  const voice = ownerVoiceOf(target, owner, lang);
   if (!voice) return null;
-  const stored = await ARDatabase.getAudioBlob(target.id, lang);
+  const stored = await ARDatabase.getAudioBlob(owner, lang);
   if (stored) return stored;
-  const nativeUrl = getAndroidBridge()?.getAudioUrl?.(nativeAudioId(target.id, lang));
+  const nativeUrl = getAndroidBridge()?.getAudioUrl?.(nativeAudioId(owner, lang));
   if (nativeUrl) return nativeUrl;
   return voice.url || null;
 }

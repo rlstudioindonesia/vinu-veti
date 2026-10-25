@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.arbook.kxywzp"
     minSdk = 24
     targetSdk = 36
-    versionCode = 19
-    versionName = "19.0"
+    versionCode = 20
+    versionName = "20.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -231,8 +231,13 @@ abstract class BundleContentTask : DefaultTask() {
         if (file is String && file.isNotEmpty() && file !in files) files[file] = (sha as? String) to ((size as? Number)?.toLong() ?: 0L)
       }
       add(t["model"], t["modelSha"], t["modelSize"])
-      (t["assets"] as? List<Map<String, Any?>>)?.forEach { add(it["file"], it["sha"], it["size"]) }
-      (t["voices"] as? Map<String, Map<String, Any?>?>)?.values?.forEach { v -> if (v != null) add(v["file"], v["sha"], v["size"]) }
+      fun addVoices(voices: Any?) = (voices as? Map<String, Map<String, Any?>?>)?.values?.forEach { v -> if (v != null) add(v["file"], v["sha"], v["size"]) }
+      (t["assets"] as? List<Map<String, Any?>>)?.forEach {
+        add(it["file"], it["sha"], it["size"])
+        addVoices(it["voices"]) // an extra animation's own voices
+      }
+      addVoices(t["voices"])
+      addVoices(t["voices2"]) // the main animation's 2nd voice
       (t["picture"] as? Map<String, Any?>)?.let { add(it["file"], it["sha"], it["size"]) }
       add(t["audio"], t["audioSha"], t["audioSize"])
       return files

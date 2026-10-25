@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { ARQRTarget } from './types/arBook';
-import { ARDatabase } from './services/db';
+import { ARDatabase, ownerVoiceOf, secondVoiceOwner, voiceOwners } from './services/db';
 import { resolveAudioForAR, resolvePictureForAR, syncContentPack } from './services/contentPack';
 import { imageDetector } from './services/imageDetector';
 import { getCloudUser } from './services/cloudPublish';
@@ -248,8 +248,12 @@ export default function App() {
     );
   }, [targets, currentView]);
 
+  // How often the main animation was shown again by a touch (its voice 1 and voice 2 take turns)
+  const mainTurnRef = useRef(0);
+
   const resetAR = useCallback(() => {
     if (qrLossTimerRef.current) window.clearTimeout(qrLossTimerRef.current);
+    mainTurnRef.current = 0;
     setActiveTarget(null);
     setQrAnchor(null);
     soundService.stopAudio();
@@ -268,6 +272,11 @@ export default function App() {
       // Fetch (and keep on the phone) the narration while the model loads, so it is ready when the
       // character appears and also plays offline next time
       resolveAudioForAR(matched, langRef.current).catch(() => undefined);
+      // …and the other voices (2nd voice, extra animations), so a touch answers right away
+      voiceOwners(matched)
+        .slice(1)
+        .forEach((owner) => ownerVoiceOf(matched, owner, langRef.current) && resolveAudioForAR(matched, langRef.current, owner).catch(() => undefined));
+      mainTurnRef.current = 0;
         setActiveTarget(matched);
     }
     setQrAnchor(anchor);
@@ -277,14 +286,52 @@ export default function App() {
   }, []);
 
 
-  // Narration starts when the character actually appears on the AR screen, in the chosen language
-  const handleModelShown = useCallback(() => {
-    const t = activeTargetRef.current;
-    if (!t || t.autoPlayAudio === false) return;
-    resolveAudioForAR(t, langRef.current).then((src) => {
+  /** Plays one voice of the current sticker (main, 2nd voice or an extra animation's own voice). */
+  const playVoice = useCallback((t: ARQRTarget, owner: string) => {
+    resolveAudioForAR(t, langRef.current, owner).then((src) => {
       if (src && activeTargetRef.current?.id === t.id) soundService.playManualAudio(src);
     });
   }, []);
+
+  /** The main animation's voice for its current turn: voice 2 every other time, when there is one. */
+  const mainVoiceOwner = (t: ARQRTarget) => {
+    const second = secondVoiceOwner(t.id);
+    return mainTurnRef.current % 2 === 1 && ownerVoiceOf(t, second, langRef.current) ? second : t.id;
+  };
+
+  // Narration starts when the character actually appears on the AR screen, in the chosen language:
+  // the voice of the animation shown (an extra animation without its own voice: the main voice)
+  const handleModelShown = useCallback(
+    (variant: number) => {
+      const t = activeTargetRef.current;
+      if (!t || t.autoPlayAudio === false) return;
+      const asset = variant > 0 ? t.assets?.[variant - 1] : undefined;
+      playVoice(t, asset && ownerVoiceOf(t, asset.id, langRef.current) ? asset.id : mainVoiceOwner(t));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [playVoice]
+  );
+
+  // Touching the character: an extra animation with its own voice says it; back on the main
+  // animation, voice 1 and voice 2 take turns. Without those voices nothing changes (as before).
+  const handleCharacterTap = useCallback(
+    (variant: number, changed: boolean): boolean => {
+      const t = activeTargetRef.current;
+      if (!t || t.autoPlayAudio === false) return false;
+      if (variant === 0) {
+        if (!ownerVoiceOf(t, secondVoiceOwner(t.id), langRef.current)) return false;
+        mainTurnRef.current++;
+        playVoice(t, mainVoiceOwner(t));
+        return true;
+      }
+      const asset = t.assets?.[variant - 1];
+      if (!changed || !asset || !ownerVoiceOf(t, asset.id, langRef.current)) return false;
+      playVoice(t, asset.id);
+      return true;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [playVoice]
+  );
 
   const showCamera = useCallback(() => {
     resetAR();
@@ -368,7 +415,7 @@ export default function App() {
           <Suspense fallback={null}>
             <CameraFeed onBarcodeDetected={handleQRDetected} videoRef={videoRef} />
             {/* Characters (and their voices) only appear after the safety notice is accepted */}
-            {safetyAccepted && <ThreeCanvas target={activeTarget} upcoming={upcoming} qrAnchor={qrAnchor} onModelShown={handleModelShown} />}
+            {safetyAccepted && <ThreeCanvas target={activeTarget} upcoming={upcoming} qrAnchor={qrAnchor} onModelShown={handleModelShown} onCharacterTap={handleCharacterTap} />}
           </Suspense>
           {!safetyAccepted && <ARSafetyNotice onAccept={() => setSafetyAccepted(true)} />}
           <ARScannerOverlay

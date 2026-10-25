@@ -16,6 +16,8 @@ export interface ARQRTargetAsset {
   scale?: number; // Size on the QR when this animation is shown (like modelScale); default = modelScale
   sha?: string; // SHA-256 and size of the published online file (content packs only)
   size?: number;
+  // Own voice per language, played when the child taps the character to this animation
+  voices?: Partial<Record<VoiceLang, VoiceFile>>;
 }
 
 export interface ARQRTarget {
@@ -33,6 +35,9 @@ export interface ARQRTarget {
   elevationOffset: number; // Height above the QR, in QR widths
   // Narration voice per language (.mp3, .wav, .m4a), played when the character appears in AR
   voices?: Partial<Record<VoiceLang, VoiceFile>>;
+  // Second voice of the main animation per language: when the child taps back to the main
+  // animation, the two voices take turns (1st appearance voice 1, next time voice 2, …)
+  voices2?: Partial<Record<VoiceLang, VoiceFile>>;
   autoPlayAudio?: boolean;
   // Picture (e.g. the book page) that shows the model too, next to the QR sticker (.jpg/.png).
   // The file itself is stored locally under pictureKey(id).

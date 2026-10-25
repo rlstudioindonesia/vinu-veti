@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ARQRTarget, ARQRTargetAsset } from '../../types/arBook';
-import { ARDatabase, audioKey, pictureKey, resolveAudioSource, resolvePictureSource, voiceOf } from '../../services/db';
+import { ARDatabase, audioKey, pictureKey, resolveAudioSource, resolvePictureSource, secondVoiceOwner, voiceOf, voicesOfOwner } from '../../services/db';
 import { VOICE_LANGS, VoiceLang } from '../../types/arBook';
 import { exportContentPack, importContentPack, markPackStickerDeleted, pendingDeletionCount, saveFileToDevice } from '../../services/contentPack';
 import { isUnpublished, lastPublishedAt } from '../../services/cloudPublish';
@@ -198,6 +198,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [pendingVoices, setPendingVoices] = useState<Partial<Record<VoiceLang, PendingFile>>>({});
   const [removedVoices, setRemovedVoices] = useState<VoiceLang[]>([]);
   const [playingVoice, setPlayingVoice] = useState<VoiceLang | null>(null);
+  // Voices besides the main one (main animation's 2nd voice, extra animations' own voices), keyed
+  // "<owner>|<lang>" (owner: secondVoiceOwner(id) or the extra animation's id)
+  const [pendingOwnerVoices, setPendingOwnerVoices] = useState<Record<string, PendingFile>>({});
+  const [removedOwnerVoices, setRemovedOwnerVoices] = useState<string[]>([]);
+  const [playingOwnerVoice, setPlayingOwnerVoice] = useState<string | null>(null);
   // Picture tracking: picture picked in the form (saved with the sticker), removal, preview and how
   // well it can be recognised
   const [pendingPicture, setPendingPicture] = useState<PendingFile | null>(null);
@@ -222,11 +227,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setRemovedExtraIds([]);
     setPendingVoices({});
     setRemovedVoices([]);
+    setPendingOwnerVoices({});
+    setRemovedOwnerVoices([]);
     setPendingPicture(null);
     setPictureRemoved(false);
     setFormError(null);
     soundService.stopAudio();
     setPlayingVoice(null);
+    setPlayingOwnerVoice(null);
   };
 
   const closeFormNow = () => {
@@ -538,8 +546,108 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditingTarget({ ...editingTarget, ...legacy, voices });
   };
 
+  /** Sets (or removes) one voice of an owner in the form: the 2nd voice or an extra animation's voice. */
+  const setOwnerVoice = (owner: string, lang: VoiceLang, voice: { name: string } | null) => {
+    if (!editingTarget) return;
+    const next = (cur: Partial<Record<VoiceLang, { name: string }>> | undefined) => {
+      const v = { ...(cur || {}) };
+      if (voice) v[lang] = voice;
+      else delete v[lang];
+      return Object.keys(v).length > 0 ? v : undefined;
+    };
+    if (owner === secondVoiceOwner(editingTarget.id)) {
+      setEditingTarget({ ...editingTarget, voices2: next(editingTarget.voices2) });
+    } else {
+      setEditingTarget({
+        ...editingTarget,
+        assets: (editingTarget.assets || []).map((a) => (a.id === owner ? { ...a, voices: next(a.voices) } : a)),
+      });
+    }
+  };
+
+  const handleOwnerVoiceUpload = async (owner: string, lang: VoiceLang, e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = await readFile(e);
+    if (!f || !editingTarget) return;
+    soundService.stopAudio();
+    setPlayingOwnerVoice(null);
+    const key = `${owner}|${lang}`;
+    setPendingOwnerVoices({ ...pendingOwnerVoices, [key]: f });
+    setRemovedOwnerVoices(removedOwnerVoices.filter((k) => k !== key));
+    setOwnerVoice(owner, lang, { name: f.name });
+  };
+
+  const handleOwnerVoiceRemove = (owner: string, lang: VoiceLang) => {
+    soundService.stopAudio();
+    setPlayingOwnerVoice(null);
+    const key = `${owner}|${lang}`;
+    const pending = { ...pendingOwnerVoices };
+    delete pending[key];
+    setPendingOwnerVoices(pending);
+    setRemovedOwnerVoices([...removedOwnerVoices, key]);
+    setOwnerVoice(owner, lang, null);
+  };
+
+  const handleOwnerVoicePreview = async (owner: string, lang: VoiceLang) => {
+    soundService.stopAudio();
+    setPlayingVoice(null);
+    const key = `${owner}|${lang}`;
+    if (playingOwnerVoice === key) {
+      setPlayingOwnerVoice(null);
+      return;
+    }
+    if (!editingTarget) return;
+    const src = pendingOwnerVoices[key]?.data ?? (await resolveAudioSource(editingTarget, lang, owner));
+    if (src) {
+      soundService.playManualAudio(src);
+      setPlayingOwnerVoice(key);
+    }
+  };
+
+  /** Rows to pick / test / remove one owner's voice in the 3 languages. */
+  const renderOwnerVoices = (owner: string) =>
+    VOICE_LANGS.map((lang) => {
+      const voice = editingTarget ? voicesOfOwner(editingTarget, owner)?.[lang] : undefined;
+      const key = `${owner}|${lang}`;
+      return (
+        <div key={key} className="flex items-center justify-between gap-2 px-2 py-1 bg-slate-900 rounded-lg border border-slate-800">
+          <div className="flex items-center gap-2 overflow-hidden text-xs min-w-0">
+            <Flag lang={lang} className="h-3.5 w-5" title={VOICE_LABELS[lang].label} />
+            <label className="cursor-pointer px-2 py-0.5 bg-sky-700 hover:bg-sky-600 text-white rounded-md text-[10px] font-semibold shrink-0">
+              {voice ? 'Ganti' : 'Pilih'}
+              <input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" onChange={(e) => handleOwnerVoiceUpload(owner, lang, e)} className="hidden" />
+            </label>
+            <span className="text-[10px] text-slate-400 truncate">
+              {voice ? voice.name : 'Belum ada'}
+              {pendingOwnerVoices[key] ? ' (belum disimpan)' : ''}
+            </span>
+          </div>
+          {voice && (
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleOwnerVoicePreview(owner, lang)}
+                className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-sky-400 flex items-center gap-1 text-[10px]"
+              >
+                {playingOwnerVoice === key ? <Square className="w-3 h-3 fill-sky-400" /> : <Play className="w-3 h-3 fill-sky-400" />}
+                {playingOwnerVoice === key ? 'Stop' : 'Tes'}
+              </button>
+              <button
+                type="button"
+                onClick={() => askDeletePassword(`Hapus suara ${lang.toUpperCase()}?`, () => handleOwnerVoiceRemove(owner, lang))}
+                className="p-1 rounded-md bg-slate-800 hover:bg-rose-900/40 text-slate-400 hover:text-rose-400"
+                title="Hapus suara"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    });
+
   const handleVoicePreview = async (lang: VoiceLang) => {
     soundService.stopAudio();
+    setPlayingOwnerVoice(null);
     if (playingVoice === lang) {
       setPlayingVoice(null);
       return;
@@ -640,6 +748,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         await ARDatabase.saveAudioBlob(editingTarget.id, f.data, f.name, undefined, lang);
       }
       if (removedVoices.length > 0) await ARDatabase.deleteAssetKeys(removedVoices.map((l) => audioKey(editingTarget.id, l)));
+      // 2nd voice and extra animations' voices (an extra animation removed here took its voices with it)
+      const liveOwners = new Set([secondVoiceOwner(editingTarget.id), ...(editingTarget.assets || []).map((a) => a.id)]);
+      for (const [key, f] of Object.entries(pendingOwnerVoices)) {
+        const [owner, lang] = key.split('|') as [string, VoiceLang];
+        if (liveOwners.has(owner)) await ARDatabase.saveAudioBlob(owner, f.data, f.name, undefined, lang);
+      }
+      const removedKeys = removedOwnerVoices
+        .map((k) => k.split('|') as [string, VoiceLang])
+        .filter(([owner]) => liveOwners.has(owner))
+        .map(([owner, lang]) => audioKey(owner, lang));
+      if (removedKeys.length > 0) await ARDatabase.deleteAssetKeys(removedKeys);
       if (pendingPicture) await ARDatabase.saveAssetBlob(pictureKey(editingTarget.id), pendingPicture.data, pendingPicture.name);
       else if (pictureRemoved) await ARDatabase.deleteAssetKeys([pictureKey(editingTarget.id)]);
 
@@ -1103,6 +1222,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 className="w-full accent-emerald-500"
                               />
                             </label>
+                            <div className="mt-1 space-y-1">
+                              <span className="block text-[10px] font-semibold text-sky-300">
+                                Suara Gerakan {i + 2} (opsional, diputar saat anak menyentuh ke gerakan ini)
+                              </span>
+                              {renderOwnerVoices(asset.id)}
+                            </div>
                           </div>
                           <div className="flex items-center shrink-0">
                             <button
@@ -1226,6 +1351,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </div>
                   );
                 })}
+
+                <div className="pt-2 border-t border-slate-800 space-y-1.5">
+                  <span className="text-[11px] font-bold text-sky-300">Suara ke-2 Gerakan 1 (opsional)</span>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    Bergantian dengan suara di atas: muncul pertama suara 1, lalu setiap kali anak menyentuh karakter dan
+                    Gerakan 1 tampil lagi, berganti suara 2, suara 1, dan seterusnya.
+                  </p>
+                  {renderOwnerVoices(secondVoiceOwner(editingTarget.id))}
+                </div>
               </div>
 
               <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2">

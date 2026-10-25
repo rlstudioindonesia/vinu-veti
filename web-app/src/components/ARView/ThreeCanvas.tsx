@@ -17,8 +17,17 @@ interface ThreeCanvasProps {
   /** Stickers of the next (and previous) pages: prepared in the background so they appear instantly. */
   upcoming?: ARQRTarget[];
   qrAnchor: QRAnchor | null;
-  /** Called once each time the character appears on screen (new sticker, or back after losing the QR). */
-  onModelShown?: () => void;
+  /**
+   * Called once each time the character appears on screen (new sticker, or back after losing the QR),
+   * with the animation shown (0 = main model, 1… = extra animations).
+   */
+  onModelShown?: (variant: number) => void;
+  /**
+   * The child touched the character; `variant` is the animation now shown and `changed` whether that
+   * is another animation than before (its own voice). Returning true means the touch did something
+   * (a voice), so the character answers with its little jump even when it has a single animation.
+   */
+  onCharacterTap?: (variant: number, changed: boolean) => boolean | void;
 }
 
 /** One uploaded .glb of the sticker's character (main model or an extra animation file). */
@@ -176,10 +185,12 @@ function gestureHintsLeft(): number {
   }
 }
 
-export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAnchor, onModelShown }) => {
+export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAnchor, onModelShown, onCharacterTap }) => {
   const { t: tr, lang } = useI18n();
   const onShownRef = useRef(onModelShown);
   onShownRef.current = onModelShown;
+  const onTapRef = useRef(onCharacterTap);
+  onTapRef.current = onCharacterTap;
   const announcedRef = useRef<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -435,7 +446,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
             want = model.children.some((c) => c.visible);
             if (want && !announcedRef.current) {
               announcedRef.current = true;
-              onShownRef.current?.();
+              onShownRef.current?.(Math.max(0, activeVariantRef.current));
             }
           }
         }
@@ -805,11 +816,20 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({ target, upcoming, qrAn
   // Only when the sticker has more than one animation; otherwise touching does nothing at all.
   const handleTapObject = useCallback(() => {
     const steps = stepsRef.current;
-    if (steps.length < 2) return;
+    if (steps.length < 2) {
+      // A single animation: only a 2nd voice of the main animation answers the touch
+      if (steps.length === 1 && onTapRef.current?.(0, false)) {
+        navigator.vibrate?.(35);
+        bounceStartRef.current = performance.now();
+      }
+      return;
+    }
     navigator.vibrate?.(35);
     bounceStartRef.current = performance.now();
+    const before = activeVariantRef.current;
     activateStep((stepIndexRef.current + 1) % steps.length);
     setShowHint(false);
+    onTapRef.current?.(activeVariantRef.current, activeVariantRef.current !== before);
   }, [activateStep]);
 
   // Diagnostics overlay, toggled by tapping the sticker name 5 times (see ARScannerOverlay)

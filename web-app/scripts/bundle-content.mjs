@@ -79,8 +79,15 @@ async function main() {
   const filesOf = (t) => {
     const out = new Map();
     if (t.model) out.set(t.model, { sha: t.modelSha, size: t.modelSize });
-    for (const a of t.assets || []) out.set(a.file, { sha: a.sha, size: a.size });
-    for (const v of Object.values(t.voices || {})) if (v?.file) out.set(v.file, { sha: v.sha, size: v.size });
+    const addVoices = (voices) => {
+      for (const v of Object.values(voices || {})) if (v?.file) out.set(v.file, { sha: v.sha, size: v.size });
+    };
+    for (const a of t.assets || []) {
+      out.set(a.file, { sha: a.sha, size: a.size });
+      addVoices(a.voices); // an extra animation's own voices
+    }
+    addVoices(t.voices);
+    addVoices(t.voices2); // the main animation's 2nd voice
     if (t.picture?.file) out.set(t.picture.file, { sha: t.picture.sha, size: t.picture.size });
     if (t.audio && !out.has(t.audio)) out.set(t.audio, { sha: t.audioSha, size: t.audioSize });
     return out;
