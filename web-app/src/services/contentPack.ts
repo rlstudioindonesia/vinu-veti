@@ -12,7 +12,7 @@
  */
 import type { Zippable } from 'fflate';
 import { ARQRTarget, VOICE_LANGS, VoiceFile, VoiceLang } from '../types/arBook';
-import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, pictureKey, resolveAudioSource, resolveModelSource, resolvePictureSource, voiceOf } from './db';
+import { ARDatabase, arrayBufferToBase64, audioKey, getModelEntries, pictureKey, resolveAudioSource, resolveModelSource, resolvePictureSource, voiceOf, ownerVoiceOf, secondVoiceOwner, voiceOwners, voicesOfOwner } from './db';
 import { CHUNK_SIZE, currentContentUrl, partCount, REMOTE_CONTENT_BASE, sha256Hex } from './cloudConfig';
 
 export interface PackFile {
@@ -34,9 +34,12 @@ export interface PackTarget {
   modelSha?: string;
   modelSize?: number;
   modelName?: string;
-  assets?: Array<{ id: string; name: string; scale?: number } & PackFile>;
+  // Extra animations; each may have its own voice per language (played when tapped to)
+  assets?: Array<{ id: string; name: string; scale?: number; voices?: PackVoices } & PackFile>;
   // Narration voice per language
-  voices?: Partial<Record<VoiceLang, PackFile & { name?: string }>>;
+  voices?: PackVoices;
+  // Second voice of the main animation (takes turns with `voices` when tapped back to it)
+  voices2?: PackVoices;
   // Picture that shows the model too (picture tracking)
   picture?: PackFile & { name?: string };
   // Legacy single voice (= Indonesian), still written for older app versions
@@ -44,6 +47,24 @@ export interface PackTarget {
   audioSha?: string;
   audioSize?: number;
   audioName?: string;
+}
+
+type PackVoices = Partial<Record<VoiceLang, PackFile & { name?: string }>>;
+
+/** Manifest voices -> sticker voices at `base`. */
+function toVoiceFiles(v: PackVoices | undefined, base: string): Partial<Record<VoiceLang, VoiceFile>> | undefined {
+  if (!v || Object.keys(v).length === 0) return undefined;
+  return Object.fromEntries(
+    Object.entries(v).map(([lang, f]) => [lang, { name: f!.name || 'audio', url: new URL(f!.file, base).href, sha: f!.sha, size: f!.size }])
+  ) as Partial<Record<VoiceLang, VoiceFile>>;
+}
+
+/** Every extra voice of a manifest entry with its owner (2nd voice, extra animations' voices). */
+function extraPackVoices(p: PackTarget): Array<{ owner: string; voices: PackVoices }> {
+  const out: Array<{ owner: string; voices: PackVoices }> = [];
+  if (p.voices2) out.push({ owner: secondVoiceOwner(p.id), voices: p.voices2 });
+  (p.assets || []).forEach((a) => a.voices && out.push({ owner: a.id, voices: a.voices }));
+  return out;
 }
 
 /** Voices of a manifest entry, including the legacy single voice (= Indonesian). */
@@ -313,6 +334,9 @@ function sameFiles(a: ARQRTarget, b: ARQRTarget): boolean {
       t.customGlbSize,
       (t.assets || []).map((x) => [x.id, x.url, x.sha, x.size]),
       VOICE_LANGS.map((l) => [t.voices?.[l]?.url, t.voices?.[l]?.sha, t.voices?.[l]?.size]),
+      voiceOwners(t)
+        .slice(1)
+        .map((o) => VOICE_LANGS.map((l) => [voicesOfOwner(t, o)?.[l]?.url, voicesOfOwner(t, o)?.[l]?.sha, voicesOfOwner(t, o)?.[l]?.size])),
       [t.picture?.url, t.picture?.sha, t.picture?.size],
     ]);
   return files(a) === files(b);
@@ -406,10 +430,10 @@ function modelJob(target: ARQRTarget, index: number): MirrorJob | null {
   };
 }
 
-function audioJob(target: ARQRTarget, lang: VoiceLang): MirrorJob | null {
-  const voice = voiceOf(target, lang);
+function audioJob(target: ARQRTarget, lang: VoiceLang, owner: string = target.id): MirrorJob | null {
+  const voice = ownerVoiceOf(target, owner, lang);
   if (!voice || !isOnlineUrl(voice.url)) return null;
-  return { key: audioKey(target.id, lang), id: target.id, kind: 'audio', lang, url: voice.url, sha: voice.sha, size: voice.size, name: voice.name || 'audio' };
+  return { key: audioKey(owner, lang), id: owner, kind: 'audio', lang, url: voice.url, sha: voice.sha, size: voice.size, name: voice.name || 'audio' };
 }
 
 function pictureJob(target: ARQRTarget): MirrorJob | null {
@@ -456,16 +480,18 @@ async function ensureStored(job: MirrorJob | null): Promise<void> {
 export async function prefetchSticker(target: ARQRTarget, lang: VoiceLang): Promise<void> {
   await ensureStored(modelJob(target, 0));
   await ensureStored(audioJob(target, lang));
+  // The other voices of this sticker (2nd voice, extra animations) are small: ready for the taps
+  for (const owner of voiceOwners(target).slice(1)) await ensureStored(audioJob(target, lang, owner));
 }
 
 /** Voice source for the AR view (see resolveForAR): a voice heard once also plays offline. */
-export async function resolveAudioForAR(target: ARQRTarget, lang: VoiceLang): Promise<Blob | ArrayBuffer | string | null> {
-  const job = audioJob(target, lang);
-  if (!job) return resolveAudioSource(target, lang);
+export async function resolveAudioForAR(target: ARQRTarget, lang: VoiceLang, owner: string = target.id): Promise<Blob | ArrayBuffer | string | null> {
+  const job = audioJob(target, lang, owner);
+  if (!job) return resolveAudioSource(target, lang, owner);
   return resolveForAR(
     job,
-    () => ARDatabase.getAudioBlob(target.id, lang),
-    () => ARDatabase.nativeAudioUrl(target.id, lang)
+    () => ARDatabase.getAudioBlob(owner, lang),
+    () => ARDatabase.nativeAudioUrl(owner, lang)
   );
 }
 
@@ -502,7 +528,9 @@ function toTarget(p: PackTarget, base: string, createdAt: number): ARQRTarget {
       scale: a.scale,
       sha: a.sha,
       size: a.size,
+      voices: toVoiceFiles(a.voices, base),
     })),
+    voices2: toVoiceFiles(p.voices2, base),
     voices: Object.fromEntries(
       Object.entries(packVoices(p)).map(([lang, f]) => [lang, { name: f!.name || 'audio', url: new URL(f!.file, base).href, sha: f!.sha, size: f!.size }])
     ) as Partial<Record<VoiceLang, VoiceFile>>,
@@ -537,6 +565,13 @@ function mirrorJobs(p: PackTarget, t: ARQRTarget): MirrorJob[] {
     const url = t.voices?.[lang]?.url;
     if (url) jobs.push({ key: audioKey(t.id, lang), id: t.id, kind: 'audio', lang, url, sha: voices[lang]?.sha, size: voices[lang]?.size, name: voices[lang]?.name || 'audio' });
   });
+  // 2nd voice and the extra animations' own voices
+  for (const { owner, voices: pv } of extraPackVoices(p)) {
+    VOICE_LANGS.forEach((lang) => {
+      const url = voicesOfOwner(t, owner)?.[lang]?.url;
+      if (url) jobs.push({ key: audioKey(owner, lang), id: owner, kind: 'audio', lang, url, sha: pv[lang]?.sha, size: pv[lang]?.size, name: pv[lang]?.name || 'audio' });
+    });
+  }
   if (t.picture?.url) {
     const key = pictureKey(t.id);
     jobs.push({ key, id: key, kind: 'model', url: t.picture.url, sha: p.picture?.sha, size: p.picture?.size, name: p.picture?.name || 'picture.jpg' });
@@ -620,6 +655,7 @@ export async function syncContentPack(
     add(bt.model, bt.modelSha);
     (bt.assets || []).forEach((a) => add(a.file, a.sha));
     Object.values(packVoices(bt)).forEach((v) => add(v?.file, v?.sha));
+    extraPackVoices(bt).forEach(({ voices }) => Object.values(voices).forEach((v) => add(v?.file, v?.sha)));
     add(bt.picture?.file, bt.picture?.sha);
   }
   let changed = false;
@@ -646,6 +682,13 @@ export async function syncContentPack(
         for (const lang of VOICE_LANGS) {
           const v = target.voices?.[lang];
           if (v) v.url = fromApk(v.url, pv[lang]?.sha);
+        }
+        for (const owner of voiceOwners(target).slice(1)) {
+          const vs = voicesOfOwner(target, owner);
+          for (const lang of VOICE_LANGS) {
+            const v = vs?.[lang];
+            if (v) v.url = fromApk(v.url, v.sha);
+          }
         }
         if (target.picture) target.picture.url = fromApk(target.picture.url, p.picture?.sha);
       }
@@ -751,6 +794,8 @@ export interface CollectedFile {
   bytes: Uint8Array;
   sha: string;
   ext: string;
+  // Voices other than the main one: their owner (secondVoiceOwner(id) or an extra animation's id)
+  owner?: string;
 }
 
 /**
@@ -784,10 +829,10 @@ export async function buildManifest(
       updatedAt: t.updatedAt,
       assets: [],
     };
-    const take = async (src: Blob | ArrayBuffer | string | null, role: CollectedFile['role'], ext: string, assetIndex?: number, lang?: VoiceLang) => {
+    const take = async (src: Blob | ArrayBuffer | string | null, role: CollectedFile['role'], ext: string, assetIndex?: number, lang?: VoiceLang, owner?: string) => {
       const bytes = await toBytes(src);
       if (!bytes) return null;
-      const f: CollectedFile = { role, assetIndex, lang, bytes, sha: await sha256Hex(bytes), ext };
+      const f: CollectedFile = { role, assetIndex, lang, bytes, sha: await sha256Hex(bytes), ext, owner };
       const path = pathFor(t, f);
       if (onFile) await onFile(t, f, path);
       return { f, path };
@@ -832,6 +877,26 @@ export async function buildManifest(
         p.audioName = voice.name;
       }
     }
+    // The main animation's 2nd voice and the extra animations' own voices
+    const ownerVoices = async (owner: string): Promise<PackVoices | undefined> => {
+      const out: PackVoices = {};
+      for (const lang of VOICE_LANGS) {
+        const voice = ownerVoiceOf(t, owner, lang);
+        if (!voice) continue;
+        const ref = online(t, voice.url, voice.sha, voice.size);
+        const r = ref
+          ? { path: ref.file, f: { sha: ref.sha, bytes: { byteLength: ref.size } } }
+          : await take(await resolveAudioSource(t, lang, owner), 'audio', extOf(voice.name, 'mp3'), undefined, lang, owner);
+        if (r) out[lang] = { file: r.path, sha: r.f.sha, size: r.f.bytes.byteLength, name: voice.name };
+      }
+      return Object.keys(out).length > 0 ? out : undefined;
+    };
+    const voices2 = await ownerVoices(secondVoiceOwner(t.id));
+    if (voices2) p.voices2 = voices2;
+    for (const a of p.assets!) {
+      const v = await ownerVoices(a.id);
+      if (v) a.voices = v;
+    }
     if (t.picture) {
       const ref = online(t, t.picture.url, t.picture.sha, t.picture.size);
       const r = ref
@@ -853,7 +918,7 @@ export async function exportContentPack(targets: ARQRTarget[]): Promise<Blob> {
     targets,
     (t, f) =>
       f.role === 'audio'
-        ? `audio/${t.id}_${f.lang ?? 'id'}.${f.ext}`
+        ? `audio/${f.owner ?? t.id}_${f.lang ?? 'id'}.${f.ext}`
         : f.role === 'picture'
           ? `pictures/${t.id}.${f.ext}`
           : `models/${f.role === 'asset' ? t.assets![f.assetIndex!].id : t.id}.glb`,
@@ -882,9 +947,21 @@ export async function importContentPack(file: Blob): Promise<number> {
       ...toTarget(p, BUNDLED_BASE, Date.now()),
       customGlbUrl: undefined,
       voices: {},
+      voices2: undefined,
       assets: [],
       picture: undefined,
       source: 'local',
+    };
+    // A voice of any owner (main, 2nd voice, extra animation) from the ZIP into this device's storage
+    const importVoices = async (owner: string, voices: PackVoices | undefined) => {
+      const out: Partial<Record<VoiceLang, VoiceFile>> = {};
+      for (const [lang, f] of Object.entries(voices || {}) as Array<[VoiceLang, PackFile & { name?: string }]>) {
+        const data = entries[prefix + f.file];
+        if (!data) continue;
+        await ARDatabase.saveAudioBlob(owner, copy(data), f.name || 'audio', undefined, lang);
+        out[lang] = { name: f.name || 'audio' };
+      }
+      return Object.keys(out).length > 0 ? out : undefined;
     };
     const main = p.model && entries[prefix + p.model];
     if (main) await ARDatabase.saveAssetBlob(p.id, copy(main), p.modelName || `${p.id}.glb`);
@@ -892,8 +969,9 @@ export async function importContentPack(file: Blob): Promise<number> {
       const data = entries[prefix + a.file];
       if (!data) continue;
       await ARDatabase.saveAssetBlob(a.id, copy(data), a.name);
-      target.assets!.push({ id: a.id, name: a.name.replace(/\.[^/.]+$/, ''), fileName: a.name, scale: a.scale });
+      target.assets!.push({ id: a.id, name: a.name.replace(/\.[^/.]+$/, ''), fileName: a.name, scale: a.scale, voices: await importVoices(a.id, a.voices) });
     }
+    target.voices2 = await importVoices(secondVoiceOwner(p.id), p.voices2);
     for (const [lang, f] of Object.entries(packVoices(p)) as Array<[VoiceLang, PackFile & { name?: string }]>) {
       const data = entries[prefix + f.file];
       if (!data) continue;
